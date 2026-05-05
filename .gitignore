@@ -1,1 +1,5 @@
 .venv
+tcpos_clean_md
+tcpos_manual_html
+chroma_db/
+tcpos_from_pdf.md
