@@ -42,7 +42,7 @@ def main():
         os.makedirs(OUTPUT_DIR)
 
     html_files = glob.glob(f"{INPUT_DIR}/**/*.htm*", recursive=True)
-    print(f"🧹 Found {len(html_files)} HTML files. Starting pipeline...")
+    print(f"Found {len(html_files)} HTML files. Starting pipeline...")
 
     saved_count = 0
     skipped_count = 0
@@ -68,12 +68,12 @@ def main():
             saved_count += 1
                 
         except Exception as e:
-            print(f"❌ Error processing {filepath}: {e}")
+            print(f"ERROR: Failed to process {filepath}: {e}")
 
-    print("--- 📊 PIPELINE REPORT ---")
-    print(f"✅ Saved clean files: {saved_count}")
-    print(f"🗑️ Skipped empty/useless files: {skipped_count}")
-    print(f"✨ DONE! Check the {OUTPUT_DIR} folder.")
+    print("--- PIPELINE REPORT ---")
+    print(f"Saved clean files: {saved_count}")
+    print(f"Skipped empty/useless files: {skipped_count}")
+    print(f"Done. Output in: {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()

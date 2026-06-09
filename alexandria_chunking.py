@@ -20,16 +20,14 @@ def load_and_chunk_data():
     markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
-    print("--- 🏛️ ALEXANDRIA: MODULO CHUNKING ---")
-    
-    # Naviga nelle cartelle delle pagine in ordine
+    print("--- ALEXANDRIA: CHUNKING MODULE ---")
+
     page_folders = sorted([f for f in os.listdir(SOURCE_DIR) if f.startswith("page_")])
     
     for folder in page_folders:
         folder_path = os.path.join(SOURCE_DIR, folder)
         page_num = int(folder.split("_")[1])
         
-        # 🔍 IL FIX: Cerca il file .md in tutte le sottocartelle (Effetto Radar)
         md_files = glob.glob(os.path.join(folder_path, "**", "*.md"), recursive=True)
         
         if not md_files:
@@ -47,7 +45,7 @@ def load_and_chunk_data():
         # 1. Primo split basato sulla logica dei titoli Markdown
         header_splits = markdown_splitter.split_text(markdown_content)
         
-        # Fallback di sicurezza: se la pagina non ha titoli Markdown, tieni il blocco intero
+        # Fallback: if the page has no Markdown headers, keep it as a single block
         if not header_splits:
             from langchain_core.documents import Document
             header_splits = [Document(page_content=markdown_content)]
@@ -57,17 +55,16 @@ def load_and_chunk_data():
             sub_chunks = text_splitter.split_documents([doc])
             
             for chunk in sub_chunks:
-                # Iniettiamo i metadati fondamentali per il RAG
+                # Inject mandatory RAG metadata
                 chunk.metadata["source_page"] = page_num
                 chunk.metadata["document_name"] = "tcpos_manual"
                 
                 all_chunks.append(chunk)
                 
-    print(f"✨ Elaborazione completata! Generati {len(all_chunks)} frammenti di testo pronti per il Vector DB.")
+    print(f"Processing complete. Generated {len(all_chunks)} chunks ready for the vector database.")
     return all_chunks
 
 if __name__ == "__main__":
-    # Test di funzionamento del modulo
     chunks = load_and_chunk_data()
     if chunks:
-        print(f"\n📝 Esempio Frammento 1:\nMetadati: {chunks[0].metadata}\nContenuto:\n{chunks[0].page_content[:300]}...")
+        print(f"\nSample chunk 1:\nMetadata: {chunks[0].metadata}\nContent:\n{chunks[0].page_content[:300]}...")

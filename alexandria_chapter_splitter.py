@@ -39,20 +39,20 @@ CHAPTERS = [
 ]
 
 def sanitize_filename(name):
-    """Rimuove caratteri non validi per i nomi dei file e sostituisce gli spazi con underscore."""
+    """Removes invalid filename characters and replaces spaces with underscores."""
     clean_name = re.sub(r'[\\/*?:"<>|]', "", name)
     return clean_name.replace(" ", "_").strip()
 
 def split_pdf_by_chapters():
     if not os.path.exists(INPUT_PDF):
-        print(f"❌ Errore: File sorgente non trovato in {INPUT_PDF}")
+        print(f"ERROR: Source file not found at {INPUT_PDF}")
         return
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    print("--- 🏛️ ALEXANDRIA: MACRO-CHAPTER SPLITTER (Con Offset Alignment) ---")
-    print(f"📖 Apertura manuale: {INPUT_PDF}")
-    print(f"📐 Offset impostato a: +{PAGE_OFFSET} pagine\n")
+
+    print("--- ALEXANDRIA: MACRO-CHAPTER SPLITTER ---")
+    print(f"Opening manual: {INPUT_PDF}")
+    print(f"Page offset: +{PAGE_OFFSET}\n")
     
     doc_in = fitz.open(INPUT_PDF)
     max_pages = len(doc_in)
@@ -67,25 +67,25 @@ def split_pdf_by_chapters():
         safe_end = min(max_pages - 1, real_end_index)
         
         if safe_start > safe_end:
-            print(f"⚠️ Salto '{title}': range non valido ({printed_start}-{printed_end})")
+            print(f"WARNING: Skipping '{title}' — invalid range ({printed_start}-{printed_end})")
             continue
 
         safe_title = sanitize_filename(title)
         output_filename = f"{index:02d}_{safe_title}.pdf"
         output_path = os.path.join(OUTPUT_DIR, output_filename)
-        
-        # Mostra a video sia la pagina stampata che la pagina fisica calcolata
-        print(f"✂️ [{output_filename}] | Indice: {printed_start}-{printed_end} -> File: {safe_start+1}-{safe_end+1} ...", end=" ")
+
+        print(f"[{output_filename}] | Index: {printed_start}-{printed_end} -> Physical: {safe_start+1}-{safe_end+1} ...", end=" ")
         
         doc_out = fitz.open()
         doc_out.insert_pdf(doc_in, from_page=safe_start, to_page=safe_end)
-        doc_out.save(output_path)
+        # doc_out.save(output_path)
+        doc_out.save(output_path, garbage=4, deflate=True, clean=True)
         doc_out.close()
         
-        print("✅ OK")
+        print("OK")
 
     doc_in.close()
-    print(f"\n🎉 SUDDIVISIONE COMPLETATA! Trovi i capitoli nella cartella '{OUTPUT_DIR}'")
+    print(f"\nSplit complete. Chapter files saved to '{OUTPUT_DIR}'")
 
 if __name__ == "__main__":
     split_pdf_by_chapters()

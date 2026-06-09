@@ -15,29 +15,27 @@ PAGES_TO_KEEP = [
 
 def sanitize_pdf(input_path, output_path, page_ranges):
     if not os.path.exists(input_path):
-        print(f"❌ Errore: File non trovato in {input_path}")
+        print(f"ERROR: Source file not found at {input_path}")
         return
 
-    print(f"🧹 Avvio modulo Data Pre-processing su: {input_path}")
+    print(f"Starting Data Pre-processing on: {input_path}")
     doc_in = fitz.open(input_path)
-    doc_out = fitz.open()  # Crea un nuovo PDF vuoto
+    doc_out = fitz.open()
 
     for start, end in page_ranges:
-        # Controllo di sicurezza per non sforare i limiti del PDF
         max_page = len(doc_in) - 1
         safe_start = max(0, start)
         safe_end = min(max_page, end)
-        
-        print(f"➕ Estrazione blocco: pagine da {safe_start + 1} a {safe_end + 1}...")
-        
-        # insert_pdf copia chirurgicamente le pagine desiderate nel nuovo file
+
+        print(f"Extracting block: pages {safe_start + 1} to {safe_end + 1}...")
+
         doc_out.insert_pdf(doc_in, from_page=safe_start, to_page=safe_end)
 
     doc_out.save(output_path)
     doc_in.close()
     doc_out.close()
-    print(f"✨ Successo! PDF pulito e pronto per l'ingestion salvato in: {output_path}")
+    print(f"Success. Sanitized PDF saved to: {output_path}")
 
 if __name__ == "__main__":
-    print("--- 🏛️ PROGETTO ALEXANDRIA: DATA SANITIZER ---")
+    print("--- ALEXANDRIA: DATA SANITIZER ---")
     sanitize_pdf(INPUT_PDF, OUTPUT_PDF, PAGES_TO_KEEP)
