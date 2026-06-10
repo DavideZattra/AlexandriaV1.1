@@ -7,7 +7,11 @@ import time
 # --- CONFIGURATION ---
 PDF_PATH = "./Manuals/UserManual8.2.pdf"
 OUTPUT_MD = "./tcpos_master.md"
-API_URL = "http://localhost:8080/v1/chat/completions"
+
+# Qwen2.5-VL served via llama.cpp on a dedicated port (separate from the
+# main text LLM on port 8080, so both can be loaded concurrently if VRAM allows).
+API_URL = "http://localhost:8081/v1/chat/completions"
+VISION_MODEL = "qwen2.5-vl"
 DEBUG_FOLDER = "./debug_images"
 
 SYSTEM_PROMPT = """
@@ -29,7 +33,7 @@ def extract_page_with_vision(base64_image, page_num):
     print(f"Pixtral processing page {page_num}...")
 
     payload = {
-        "model": "pixtral",
+        "model": VISION_MODEL,
         "messages": [
             {
                 "role": "user",

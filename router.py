@@ -4,7 +4,10 @@ from typing import Annotated, List, TypedDict
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
+from config import CHROMA_PATH, EMBEDDING_MODEL
 
 # --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
@@ -21,6 +24,12 @@ llm = ChatOpenAI(
     temperature=0
 )
 
+# --- 2b. VECTOR STORE SETUP (ChromaDB) ---
+RETRIEVAL_K = 5
+
+embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+
 # --- 3. NODES ---
 
 def router_node(state: AgentState):
@@ -36,16 +45,37 @@ def router_node(state: AgentState):
 
 def retrieve_node(state: AgentState):
     print("--- RETRIEVING FROM CHROMADB ---")
-    # Logic to query your vector store (as we discussed previously)
-    # For now, we simulate finding 2 chunks
-    retrieved_docs = ["TCPOS Manual Section 1.2: How to open a shift...", "TCPOS Manual Section 4: Printer config..."]
+    results = vector_db.similarity_search(state["question"], k=RETRIEVAL_K)
+
+    if not results:
+        print("No relevant documents found.")
+        return {"documents": []}
+
+    retrieved_docs = []
+    for doc in results:
+        page = doc.metadata.get("source_page", "unknown")
+        document_name = doc.metadata.get("document_name", "manual")
+        retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
+
+    print(f"Retrieved {len(retrieved_docs)} chunks.")
     return {"documents": retrieved_docs}
 
 def generator_node(state: AgentState):
     print("--- GENERATING ANSWER ---")
-    context = "\n".join(state["documents"])
+    documents = state["documents"]
+
+    if not documents:
+        return {"generation": "I could not find any relevant information in the manual to answer this question."}
+
+    context = "\n\n".join(documents)
     prompt = [
-        SystemMessage(content=f"Answer based ONLY on this context: {context}"),
+        SystemMessage(content=(
+            "Answer the user's question based ONLY on the context below. "
+            "Each context block is tagged with its source document and page number. "
+            "Cite the page number(s) you used in your answer. "
+            "If the context does not contain the answer, say so explicitly.\n\n"
+            f"CONTEXT:\n{context}"
+        )),
         HumanMessage(content=state["question"])
     ]
     response = llm.invoke(prompt)

@@ -4,11 +4,7 @@ import shutil
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from alexandria_chunking import load_and_chunk_data
-
-# --- CONFIGURAZIONE ARCHITETTURA ---
-CHROMA_PATH = "./alexandria_db"
-# Usiamo un modello di embedding ultra-rapido, leggero e standard per il RAG locale
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2" 
+from config import CHROMA_PATH, EMBEDDING_MODEL
 
 def build_vector_db():
     print("--- ALEXANDRIA: VECTOR DATABASE BUILDER ---")
