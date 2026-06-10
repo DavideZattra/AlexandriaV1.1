@@ -30,7 +30,7 @@ def image_to_base64(pixmap):
     return base64.b64encode(img_data).decode('utf-8')
 
 def extract_page_with_vision(base64_image, page_num):
-    print(f"Pixtral processing page {page_num}...")
+    print(f"Vision model processing page {page_num}...")
 
     payload = {
         "model": VISION_MODEL,
@@ -55,40 +55,6 @@ def extract_page_with_vision(base64_image, page_num):
         print(f"ERROR: API call failed on page {page_num}: {e}")
         return ""
 
-# --- LEGACY: Full pipeline (first 3 pages debug mode) ---
-# def main():
-#     if not os.path.exists(DEBUG_FOLDER):
-#         os.makedirs(DEBUG_FOLDER)
-#
-#     print("--- STARTING VISION PIPELINE (DEBUG MODE) ---")
-#     doc = fitz.open(PDF_PATH)
-#     master_markdown = ""
-#
-#     # Process only the first 3 pages for testing
-#     for page_num in range(min(3, len(doc))):
-#         page = doc.load_page(page_num)
-#
-#         # Zoom to ~300 DPI for better OCR accuracy
-#         zoom_matrix = fitz.Matrix(3.0, 3.0)
-#         pix = page.get_pixmap(matrix=zoom_matrix)
-#
-#         debug_img_path = f"{DEBUG_FOLDER}/page_{page_num + 1}.jpg"
-#         pix.save(debug_img_path)
-#         print(f"Debug image saved: {debug_img_path}")
-#
-#         b64_image = image_to_base64(pix)
-#         md_text = extract_page_with_vision(b64_image, page_num + 1)
-#
-#         master_markdown += f"\n\n<!-- PAGE {page_num + 1} -->\n\n" + md_text
-#
-#         with open(OUTPUT_MD, 'w', encoding='utf-8') as f:
-#             f.write(master_markdown)
-#
-#         time.sleep(2)  # Allow the server to free VRAM between requests
-#
-#     print(f"Test complete. Check {OUTPUT_MD}")
-
-# Targeted single-page test (page 50 of the PDF)
 def main():
     if not os.path.exists(DEBUG_FOLDER):
         os.makedirs(DEBUG_FOLDER)

@@ -54,7 +54,7 @@ def main():
             # 4. THE QUALITY CONTROL GATE
             # If the resulting markdown is just a title or practically empty, skip it!
             if len(md_content) < MIN_CHAR_COUNT:
-                # print(f"⏩ Skipping {os.path.basename(filepath)} (Too short: {len(md_content)} chars)")
+                # print(f"Skipping {os.path.basename(filepath)} (Too short: {len(md_content)} chars)")
                 skipped_count += 1
                 continue
             

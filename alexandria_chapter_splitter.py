@@ -2,17 +2,17 @@ import fitz  # PyMuPDF
 import os
 import re
 
-# --- ⚙️ CONFIGURAZIONE ---
+# --- CONFIGURATION ---
 INPUT_PDF = "./Manuals/tcpos_manual.pdf"
 OUTPUT_DIR = "./alexandria_macro_chapters"
 
-# 🛠️ IL FIX DELL'OFFSET: 
-# Inserisci qui lo scostamento tra il numero di pagina stampato e la pagina fisica del PDF.
-# Esempio: Se l'indice dice "Pagina 31" ma il lettore PDF indica "Pagina 40", l'offset è 9.
-PAGE_OFFSET = 39  # <-- Modifica questo numero con il tuo offset reale!
+# OFFSET FIX:
+# Set the difference between the printed page number and the physical PDF page.
+# Example: if the index says "Page 31" but the PDF reader shows "Page 40", the offset is 9.
+PAGE_OFFSET = 39  # <-- Change this number to match your actual offset
 
-# Mappatura esatta dell'indice fornito
-# Formato: ("Nome del Capitolo", Pagina_Inizio_Stampata, Pagina_Fine_Stampata)
+# Exact mapping from the provided table of contents
+# Format: ("Chapter Name", Printed_Start_Page, Printed_End_Page)
 CHAPTERS = [
     ("General Concepts of the TCPOS.net Application", 31, 107),
     ("Admin module", 108, 188),
@@ -59,7 +59,7 @@ def split_pdf_by_chapters():
 
     for index, (title, printed_start, printed_end) in enumerate(CHAPTERS, start=1):
         
-        # Allineamento matematico: Pagina Stampata + Offset - 1 (perché PyMuPDF parte da 0)
+        # Alignment math: Printed Page + Offset - 1 (because PyMuPDF starts from 0)
         real_start_index = (printed_start + PAGE_OFFSET) - 1
         real_end_index = (printed_end + PAGE_OFFSET) - 1
         

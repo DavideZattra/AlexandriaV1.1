@@ -1,16 +1,15 @@
 import fitz  # PyMuPDF
 import os
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURATION ---
 INPUT_PDF = "./Manuals/tcpos_manual.pdf"
 OUTPUT_PDF = "./Manuals/Sanitized/tcpos_manual.pdf"
 
-# Definisci i range di pagine da TENERE (il "succo" del manuale).
-# ⚠️ ATTENZIONE: Python conta partendo da 0! 
-# Se nel lettore PDF vedi pagina 12, qui devi scrivere 11.
+# Define the page ranges to KEEP (the core content of the manual).
+# WARNING: Python counts from 0! If you see page 12 in the PDF reader, write 11 here.
 PAGES_TO_KEEP = [
-    (44, 2728),   # Esempio: Tieni le pagine da 12 a 81 del PDF (Capitoli centrali)
-    # (85, 120)   # Esempio: Salta 4 pagine inutili e tieni dalla 86 alla 121
+    (44, 2728),   # Example: keep the central chapters
+    # (85, 120)   # Example: skip a few useless pages and keep pages 86 to 121
 ]
 
 def sanitize_pdf(input_path, output_path, page_ranges):

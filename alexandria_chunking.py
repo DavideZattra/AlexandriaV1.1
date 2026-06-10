@@ -2,15 +2,15 @@ import os
 import glob
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURATION ---
 SOURCE_DIR = "./alexandria_knowledge_base"
-CHUNK_SIZE = 1000  # Dimensione ideale del frammento in caratteri
-CHUNK_OVERLAP = 200  # Sovrapposizione per non perdere il contesto tra i tagli
+CHUNK_SIZE = 1000  # Ideal chunk size in characters
+CHUNK_OVERLAP = 200  # Overlap to preserve context across splits
 
 def load_and_chunk_data():
     all_chunks = []
     
-    # Definiamo gli header Markdown su cui fare lo split logico
+    # Define the Markdown headers to split on logically
     headers_to_split_on = [
         ("#", "Header_1"),
         ("##", "Header_2"),
@@ -38,11 +38,11 @@ def load_and_chunk_data():
         with open(md_file_path, "r", encoding="utf-8") as f:
             markdown_content = f.read()
             
-        # Se la pagina è completamente vuota, saltala
+        # Skip the page if it is completely empty
         if not markdown_content.strip():
             continue
 
-        # 1. Primo split basato sulla logica dei titoli Markdown
+        # 1. First split based on Markdown header logic
         header_splits = markdown_splitter.split_text(markdown_content)
         
         # Fallback: if the page has no Markdown headers, keep it as a single block
@@ -50,7 +50,7 @@ def load_and_chunk_data():
             from langchain_core.documents import Document
             header_splits = [Document(page_content=markdown_content)]
         
-        # 2. Secondo split per rispettare i limiti di grandezza
+        # 2. Second split to respect the size limits
         for doc in header_splits:
             sub_chunks = text_splitter.split_documents([doc])
             

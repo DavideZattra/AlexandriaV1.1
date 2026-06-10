@@ -4,14 +4,14 @@ import time
 import fitz  # PyMuPDF
 import subprocess
 
-# --- ⚙️ CONFIGURAZIONE ARCHITETTURA ---
+# --- ARCHITECTURE CONFIGURATION ---
 INPUT_PDF = "./Manuals/Sanitized/tcpos_manual.pdf"
 OUTPUT_BASE_DIR = "./alexandria_knowledge_base"
 TEMP_PDF = "temp_batch_page.pdf"
 CHECKPOINT_FILE = "alexandria_checkpoint.txt"
 
-# Imposta il timer in secondi (30 minuti = 1800 secondi)
-PAUSE_INTERVAL_SECONDS = 120 * 60 
+# Pause interval in seconds (120 minutes)
+PAUSE_INTERVAL_SECONDS = 120 * 60
 
 def get_last_checkpoint():
     """Reads the last successfully processed page index from the checkpoint file."""
