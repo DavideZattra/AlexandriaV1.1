@@ -1,0 +1,22 @@
+1. What is the purpose of the visibility criteria concept in the TCPOS application?
+2. Which promotional formats are capable of activating a promotion that prints a barcode?
+3. How does the "multiple country system" handle environments where a shop is located in a different country than the central data server?
+4. Why does TCPOS manage messages between clients, such as tills and handhelds, via PeerToPeer (P2P)?
+5. During the start-up of the program, what check is performed on TCPOS core assemblies regarding expiration dates?
+6. How many days does a user have to register their TCPOS license after the first software activation before the Admin module is blocked?
+7. What happens during start-up if a plugin is installed but its relevant license is found to be invalid?
+8. When the system country is not set to France, what are the two methods available for modifying VATs?
+9. In TCPOS terminology, what is the "system currency" and what menu path is used to configure it?
+10. Which specific function key can an operator use to take ownership of a single table that is currently owned by another operator?
+11. How are authorization profiles typically grouped for operators, and what external devices can be used to speed up the login procedure?
+12. When creating a new permission profile in Admin, what is the default state of all initialized permissions?
+13. When defining wildcards for customer card codes, which character should be used to substitute non-significant characters?
+14. What are the specific FrontEnd function keys used to either export all transactions or export and remove offline transactions?
+15. What is the default URL for the TCPOS FTP site used when automatically sending till support data?
+16. In the context of the TCPOS Scheduler, what are the three main properties (components) that define a "job"?
+17. What specific file extensions are used to save electronic logs and traces on the till's disk?
+18. What is the functional difference between the "Operator permissions" function key and the "Change operator" function key when a supervisor takes over a till?
+19. How can you verify in an operator's base data if they have been granted temporary table service permissions?
+20. Which local directories on the till's hard disk are used to store transaction and journal files for offline functioning?
+21. When the system is configured for "Country France", why are the fields for modifying the base data of existing VAT codes set to read-only?
+22. Which FrontEnd function keys have been specifically disabled due to French fiscal laws?
