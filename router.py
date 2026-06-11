@@ -28,7 +28,8 @@ llm = ChatOpenAI(
 )
 
 # --- 2b. VECTOR STORE SETUP (ChromaDB) ---
-RETRIEVAL_K = 5
+RETRIEVAL_K = 8 #increase
+# RETRIEVAL_K = 5
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
