@@ -1,5 +1,7 @@
 import json
 import operator
+import re
+import time
 from typing import Annotated, List, TypedDict
 
 from langchain_openai import ChatOpenAI
@@ -8,6 +10,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 from config import CHROMA_PATH, EMBEDDING_MODEL
+from conversation_logger import ConversationLogger
 
 # --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
@@ -32,16 +35,54 @@ vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
 
 # --- 3. NODES ---
 
+def _parse_classification(raw: str) -> str:
+    """Robustly extract the classification from a noisy LLM response.
+
+    Local models often wrap JSON in markdown fences or add stray text, so we
+    cannot rely on json.loads alone. We try strict JSON first, then fall back
+    to keyword detection, defaulting to 'manual_search' (the safe choice for a
+    knowledge-base assistant)."""
+    text = raw.strip()
+
+    # 1. Try to find a JSON object anywhere in the response
+    match = re.search(r"\{.*?\}", text, re.DOTALL)
+    if match:
+        try:
+            decision = json.loads(match.group(0))
+            value = str(decision.get("classification", "")).lower()
+            if "chitchat" in value:
+                return "chitchat"
+            if "manual" in value:
+                return "manual_search"
+        except json.JSONDecodeError:
+            pass
+
+    # 2. Fall back to keyword detection on the raw text
+    lowered = text.lower()
+    if "chitchat" in lowered:
+        return "chitchat"
+
+    # 3. Default to manual_search (safer for a manual-querying assistant)
+    return "manual_search"
+
+
 def router_node(state: AgentState):
     print("--- ROUTING QUESTION ---")
     question = state["question"]
     prompt = [
-        SystemMessage(content="Classify the user question as 'manual_search' or 'chitchat'. Respond only in JSON: {'classification': 'value'}"),
+        SystemMessage(content=(
+            "You are a query classifier. Classify the user question into exactly one "
+            "of two categories:\n"
+            "- 'manual_search': the user is asking about the product/manual content.\n"
+            "- 'chitchat': greetings, small talk, or questions unrelated to the manual.\n"
+            'Respond with ONLY a JSON object, no other text: {"classification": "manual_search"}'
+        )),
         HumanMessage(content=question)
     ]
     response = llm.invoke(prompt)
-    decision = json.loads(response.content)
-    return {"classification": decision["classification"]}
+    classification = _parse_classification(response.content)
+    print(f"Classified as: {classification}")
+    return {"classification": classification}
 
 def retrieve_node(state: AgentState):
     print("--- RETRIEVING FROM CHROMADB ---")
@@ -121,3 +162,38 @@ workflow.add_edge("chitchat", END)
 
 # Compile the Graph
 app = workflow.compile()
+
+
+# --- 6. INTERACTIVE CHAT LOOP ---
+def chat():
+    logger = ConversationLogger()
+    print("=== ALEXANDRIA RAG ===")
+    print("Ask a question about the manual. Type 'exit' or 'quit' to leave.")
+    print(f"Logging this session to: {logger.path}\n")
+    while True:
+        try:
+            question = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
+
+        if not question:
+            continue
+        if question.lower() in ("exit", "quit"):
+            print("Goodbye.")
+            break
+
+        start = time.perf_counter()
+        try:
+            result = app.invoke({"question": question})
+            latency = time.perf_counter() - start
+            print(f"\nAlexandria: {result['generation']}\n")
+            logger.log_turn(question, result=result, latency_s=latency)
+        except Exception as e:
+            latency = time.perf_counter() - start
+            print(f"\nERROR: {e}\n")
+            logger.log_turn(question, latency_s=latency, error=str(e))
+
+
+if __name__ == "__main__":
+    chat()

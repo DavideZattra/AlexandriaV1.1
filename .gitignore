@@ -6,7 +6,8 @@ tcpos_from_pdf.md
 Manuals/*
 alexandria_knowledge_base
 alexandria_db
-./_pycache_
+__pycache__/
 alexandria_macro_chapters
 Manual_Division.txt
 IMPLEMENTATION_PLAN.md
+logs/
