@@ -15,7 +15,8 @@ from datetime import datetime
 
 # Import core RAG components and parameters from router
 try:
-    from router import llm, vector_db, RETRIEVAL_K
+    from router import llm, vector_db, reranker, RETRIEVAL_K
+    from config import RERANK_CANDIDATES, RERANK_TOP_K
 except ImportError:
     print("Error: Could not import components from router.py. Make sure this script is run from the workspace root.")
     sys.exit(1)
@@ -66,11 +67,32 @@ def load_queries(file_path):
     return queries
 
 def retrieve_baseline(question: str):
-    """Retrieve documents using the current configured K from router.py."""
-    print(f"--- Retrieving from ChromaDB (K={RETRIEVAL_K}) ---")
-    results = vector_db.similarity_search(question, k=RETRIEVAL_K)
+    """Stage-1 only: pure bi-encoder similarity, top RERANK_TOP_K chunks.
+
+    Uses the same final chunk count as the reranked mode so the two are an
+    apples-to-apples comparison (same number of chunks fed to the LLM; the only
+    difference is whether they were reranked)."""
+    print(f"--- Retrieving from ChromaDB (top {RERANK_TOP_K}, no rerank) ---")
+    results = vector_db.similarity_search(question, k=RERANK_TOP_K)
     retrieved_docs = []
     for doc in results:
+        page = doc.metadata.get("source_page", "unknown")
+        document_name = doc.metadata.get("document_name", "manual")
+        retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
+    return retrieved_docs
+
+def retrieve_reranked(question: str):
+    """Two-stage retrieval: bi-encoder candidate pool + cross-encoder rerank.
+
+    Stage 1 retrieves RERANK_CANDIDATES via ChromaDB, Stage 2 reranks them with
+    the cross-encoder and keeps the top RERANK_TOP_K."""
+    print(f"--- Retrieving {RERANK_CANDIDATES} candidates, reranking to top {RERANK_TOP_K} ---")
+    candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
+    if not candidates:
+        return []
+    ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
+    retrieved_docs = []
+    for doc, score in ranked:
         page = doc.metadata.get("source_page", "unknown")
         document_name = doc.metadata.get("document_name", "manual")
         retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
@@ -117,6 +139,9 @@ def run_mode(mode, question):
     
     if mode == "baseline":
         retrieved_docs = retrieve_baseline(question)
+        generation = generate_answer(question, retrieved_docs)
+    elif mode == "reranked":
+        retrieved_docs = retrieve_reranked(question)
         generation = generate_answer(question, retrieved_docs)
     elif mode == "direct_llm":
         generation = generate_direct(question)
@@ -187,7 +212,8 @@ def write_markdown_report(results, modes, timestamp):
         f.write(f"| Mode | Avg Latency (s) | Queries Run | Description |\n")
         f.write(f"| :--- | :--- | :--- | :--- |\n")
         descriptions = {
-            "baseline": f"Baseline RAG (Chroma retrieve K={RETRIEVAL_K} + LLM)",
+            "baseline": f"Baseline RAG (Chroma top {RERANK_TOP_K}, no rerank + LLM)",
+            "reranked": f"Two-stage RAG (Chroma top {RERANK_CANDIDATES} -> cross-encoder rerank to {RERANK_TOP_K} + LLM)",
             "direct_llm": "Direct LLM (No context retrieval)"
         }
         for mode in modes:
@@ -222,7 +248,7 @@ def write_markdown_report(results, modes, timestamp):
 def main():
     parser = argparse.ArgumentParser(description="Run baseline evaluation on Alexandria test queries.")
     parser.add_argument("--mode", type=str, default="baseline",
-                        help="Comma-separated configurations to run: baseline, direct_llm, or 'all'")
+                        help="Comma-separated configurations to run: baseline, reranked, direct_llm, or 'all'")
     parser.add_argument("--queries", type=str, default="all",
                         help="Comma-separated query numbers (e.g., '1,2,5') or range ('1-5') or 'all'")
     parser.add_argument("--queries-file", type=str, default="./Docs/Test_Queries.txt",
@@ -230,7 +256,7 @@ def main():
     args = parser.parse_args()
 
     # Determine modes to run
-    all_available_modes = ["baseline", "direct_llm"]
+    all_available_modes = ["baseline", "reranked", "direct_llm"]
     if args.mode.lower() == "all":
         modes_to_run = all_available_modes
     else:

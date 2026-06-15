@@ -9,8 +9,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
-from config import CHROMA_PATH, EMBEDDING_MODEL
+from config import CHROMA_PATH, EMBEDDING_MODEL, RERANK_CANDIDATES, RERANK_TOP_K
 from conversation_logger import ConversationLogger
+from reranker import CrossEncoderReranker
 
 # --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
@@ -28,11 +29,15 @@ llm = ChatOpenAI(
 )
 
 # --- 2b. VECTOR STORE SETUP (ChromaDB) ---
-RETRIEVAL_K = 8 #increase
-# RETRIEVAL_K = 5
+# RETRIEVAL_K is the Stage-1 candidate pool size. The cross-encoder reranker
+# (Stage 2) then narrows it down to RERANK_TOP_K before generation.
+RETRIEVAL_K = RERANK_CANDIDATES
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+
+# --- 2c. CROSS-ENCODER RERANKER SETUP (Stage 2) ---
+reranker = CrossEncoderReranker()
 
 # --- 3. NODES ---
 
@@ -87,19 +92,26 @@ def router_node(state: AgentState):
 
 def retrieve_node(state: AgentState):
     print("--- RETRIEVING FROM CHROMADB ---")
-    results = vector_db.similarity_search(state["question"], k=RETRIEVAL_K)
+    question = state["question"]
 
-    if not results:
+    # Stage 1: bi-encoder retrieval — cast a wide net of candidates.
+    candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
+
+    if not candidates:
         print("No relevant documents found.")
         return {"documents": []}
 
+    # Stage 2: cross-encoder reranking — re-score and keep the most relevant.
+    print(f"--- RERANKING {len(candidates)} CANDIDATES (keep top {RERANK_TOP_K}) ---")
+    ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
+
     retrieved_docs = []
-    for doc in results:
+    for doc, score in ranked:
         page = doc.metadata.get("source_page", "unknown")
         document_name = doc.metadata.get("document_name", "manual")
         retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
 
-    print(f"Retrieved {len(retrieved_docs)} chunks.")
+    print(f"Retrieved {len(retrieved_docs)} chunks after reranking.")
     return {"documents": retrieved_docs}
 
 def generator_node(state: AgentState):
