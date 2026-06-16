@@ -16,7 +16,8 @@ from datetime import datetime
 # Import core RAG components and parameters from router
 try:
     from router import llm, vector_db, reranker, RETRIEVAL_K
-    from config import RERANK_CANDIDATES, RERANK_TOP_K
+    from config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW
+    from context_expansion import expand_contiguous_pages
 except ImportError:
     print("Error: Could not import components from router.py. Make sure this script is run from the workspace root.")
     sys.exit(1)
@@ -98,6 +99,18 @@ def retrieve_reranked(question: str):
         retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
     return retrieved_docs
 
+def retrieve_expanded(question: str):
+    """Full pipeline: bi-encoder + cross-encoder rerank + contiguous page expansion.
+
+    Stage 1 retrieves RERANK_CANDIDATES, Stage 2 reranks to RERANK_TOP_K, Stage 3
+    expands each surviving chunk with its neighbouring pages (+/- CONTEXT_WINDOW)."""
+    print(f"--- Retrieving {RERANK_CANDIDATES}, rerank to {RERANK_TOP_K}, expand +/- {CONTEXT_WINDOW} page(s) ---")
+    candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
+    if not candidates:
+        return []
+    ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
+    return expand_contiguous_pages(vector_db, ranked, window=CONTEXT_WINDOW)
+
 def generate_answer(question: str, retrieved_docs: list) -> str:
     """Send retrieved context + question to the local LLM."""
     if not retrieved_docs:
@@ -142,6 +155,9 @@ def run_mode(mode, question):
         generation = generate_answer(question, retrieved_docs)
     elif mode == "reranked":
         retrieved_docs = retrieve_reranked(question)
+        generation = generate_answer(question, retrieved_docs)
+    elif mode == "expanded":
+        retrieved_docs = retrieve_expanded(question)
         generation = generate_answer(question, retrieved_docs)
     elif mode == "direct_llm":
         generation = generate_direct(question)
@@ -214,6 +230,7 @@ def write_markdown_report(results, modes, timestamp):
         descriptions = {
             "baseline": f"Baseline RAG (Chroma top {RERANK_TOP_K}, no rerank + LLM)",
             "reranked": f"Two-stage RAG (Chroma top {RERANK_CANDIDATES} -> cross-encoder rerank to {RERANK_TOP_K} + LLM)",
+            "expanded": f"Full pipeline (rerank to {RERANK_TOP_K} -> contiguous page expansion +/- {CONTEXT_WINDOW} + LLM)",
             "direct_llm": "Direct LLM (No context retrieval)"
         }
         for mode in modes:
@@ -248,7 +265,7 @@ def write_markdown_report(results, modes, timestamp):
 def main():
     parser = argparse.ArgumentParser(description="Run baseline evaluation on Alexandria test queries.")
     parser.add_argument("--mode", type=str, default="baseline",
-                        help="Comma-separated configurations to run: baseline, reranked, direct_llm, or 'all'")
+                        help="Comma-separated configurations to run: baseline, reranked, expanded, direct_llm, or 'all'")
     parser.add_argument("--queries", type=str, default="all",
                         help="Comma-separated query numbers (e.g., '1,2,5') or range ('1-5') or 'all'")
     parser.add_argument("--queries-file", type=str, default="./Docs/Test_Queries.txt",
@@ -256,7 +273,7 @@ def main():
     args = parser.parse_args()
 
     # Determine modes to run
-    all_available_modes = ["baseline", "reranked", "direct_llm"]
+    all_available_modes = ["baseline", "reranked", "expanded", "direct_llm"]
     if args.mode.lower() == "all":
         modes_to_run = all_available_modes
     else:

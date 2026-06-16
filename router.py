@@ -9,9 +9,17 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
-from config import CHROMA_PATH, EMBEDDING_MODEL, RERANK_CANDIDATES, RERANK_TOP_K
+from config import (
+    CHROMA_PATH,
+    EMBEDDING_MODEL,
+    RERANK_CANDIDATES,
+    RERANK_TOP_K,
+    ENABLE_CONTEXT_EXPANSION,
+    CONTEXT_WINDOW,
+)
 from conversation_logger import ConversationLogger
 from reranker import CrossEncoderReranker
+from context_expansion import expand_contiguous_pages
 
 # --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
@@ -105,13 +113,18 @@ def retrieve_node(state: AgentState):
     print(f"--- RERANKING {len(candidates)} CANDIDATES (keep top {RERANK_TOP_K}) ---")
     ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
 
-    retrieved_docs = []
-    for doc, score in ranked:
-        page = doc.metadata.get("source_page", "unknown")
-        document_name = doc.metadata.get("document_name", "manual")
-        retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
+    # Stage 3 (optional): contiguous page context expansion.
+    if ENABLE_CONTEXT_EXPANSION:
+        print(f"--- EXPANDING CONTEXT (+/- {CONTEXT_WINDOW} page(s)) ---")
+        retrieved_docs = expand_contiguous_pages(vector_db, ranked, window=CONTEXT_WINDOW)
+    else:
+        retrieved_docs = []
+        for doc, score in ranked:
+            page = doc.metadata.get("source_page", "unknown")
+            document_name = doc.metadata.get("document_name", "manual")
+            retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
 
-    print(f"Retrieved {len(retrieved_docs)} chunks after reranking.")
+    print(f"Retrieved {len(retrieved_docs)} context blocks.")
     return {"documents": retrieved_docs}
 
 def generator_node(state: AgentState):
