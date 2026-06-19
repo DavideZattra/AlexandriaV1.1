@@ -2,8 +2,32 @@
 # Centralized constants used across ingestion (alexandria_vector_db.py) and
 # query time (router.py) to guarantee the embedding space stays consistent.
 
-CHROMA_PATH = "./alexandria_db"
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# --- EMBEDDING PROFILES ---
+# Each profile is a self-contained (model, db_path, query_prefix) bundle so that
+# multiple embedding models can coexist and be compared. Models with different
+# output dimensions (MiniLM=384, bge-large=1024) CANNOT share a ChromaDB
+# collection, so each profile gets its own persisted database directory.
+#
+# query_prefix: some models (BGE) are trained with an asymmetric instruction
+# prepended to queries only. Applying it keeps the accuracy comparison fair.
+EMBEDDING_PROFILES = {
+    "minilm": {
+        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "path": "./alexandria_db",          # existing DB — reused, no rebuild needed
+        "query_prefix": "",
+    },
+    "bge": {
+        "model": "BAAI/bge-large-en-v1.5",
+        "path": "./alexandria_db_bge",
+        "query_prefix": "Represent this sentence for searching relevant passages: ",
+    },
+}
+DEFAULT_PROFILE = "minilm"
+
+# Backward-compatible aliases derived from the default profile. Existing imports
+# (router.py, alexandria_vector_db.py) keep working unchanged.
+CHROMA_PATH = EMBEDDING_PROFILES[DEFAULT_PROFILE]["path"]
+EMBEDDING_MODEL = EMBEDDING_PROFILES[DEFAULT_PROFILE]["model"]
 
 # --- TWO-STAGE RETRIEVAL CONFIGURATION ---
 # Stage 1 (bi-encoder / ChromaDB): cast a wide net of candidate chunks.
