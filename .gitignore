@@ -1,4 +1,5 @@
 .venv
+.claude
 tcpos_clean_md
 tcpos_manual_html
 chroma_db/
@@ -13,3 +14,4 @@ IMPLEMENTATION_PLAN.md
 logs/
 Docs/RAG_Enhancement_Notes.md
 Docs/Evaluation_Results
+alexandria_db_bge

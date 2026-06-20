@@ -13,18 +13,19 @@ import argparse
 import re
 from datetime import datetime
 
-# Import core RAG components and parameters from router
+# Import core RAG components and parameters from the agent graph
 try:
-    from router import llm, vector_db, reranker, RETRIEVAL_K
-    from config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW
-    from context_expansion import expand_contiguous_pages
+    from alexandria.agent.graph import llm, vector_db, reranker, RETRIEVAL_K
+    from alexandria.config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW
+    from alexandria.retrieval.context_expansion import expand_contiguous_pages
+    from alexandria.paths import EVAL_RESULTS_DIR
 except ImportError:
-    print("Error: Could not import components from router.py. Make sure this script is run from the workspace root.")
+    print("Error: Could not import components from alexandria.agent.graph. Make sure this is run from the workspace root.")
     sys.exit(1)
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-OUTPUT_DIR = "./Docs/Evaluation_Results"
+OUTPUT_DIR = str(EVAL_RESULTS_DIR)
 MK_DIR = "/Md_Reports"
 LOG_DIR = "/Log_Files"
 

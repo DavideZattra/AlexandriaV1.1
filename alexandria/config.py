@@ -1,8 +1,10 @@
 # --- SHARED PROJECT CONFIGURATION ---
-# Centralized constants used across ingestion (alexandria_vector_db.py) and
-# query time (router.py) to guarantee the embedding space stays consistent.
+# Centralized constants used across ingestion (ingestion/vector_db.py) and
+# query time (agent/graph.py) to guarantee the embedding space stays consistent.
 
-CHROMA_PATH = "./alexandria_db"
+from alexandria.paths import CHROMA_DIR
+
+CHROMA_PATH = str(CHROMA_DIR)
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # --- TWO-STAGE RETRIEVAL CONFIGURATION ---

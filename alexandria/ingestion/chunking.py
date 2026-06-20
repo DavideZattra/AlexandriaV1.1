@@ -1,9 +1,10 @@
 import os
 import glob
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from alexandria.paths import KNOWLEDGE_BASE_DIR
 
 # --- CONFIGURATION ---
-SOURCE_DIR = "./alexandria_knowledge_base"
+SOURCE_DIR = str(KNOWLEDGE_BASE_DIR)
 CHUNK_SIZE = 1000  # Ideal chunk size in characters
 CHUNK_OVERLAP = 200  # Overlap to preserve context across splits
 

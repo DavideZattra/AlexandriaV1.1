@@ -14,7 +14,7 @@ module (or router.py) does not pay the model-load cost until a rerank is needed.
 
 from sentence_transformers import CrossEncoder
 
-from config import RERANKER_MODEL
+from alexandria.config import RERANKER_MODEL
 
 
 class CrossEncoderReranker:

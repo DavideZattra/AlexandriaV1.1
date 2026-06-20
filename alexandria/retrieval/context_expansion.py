@@ -15,7 +15,7 @@ enumerate the precise pages instead.
 
 from collections import defaultdict
 
-from config import CONTEXT_WINDOW
+from alexandria.config import CONTEXT_WINDOW
 
 
 def _as_documents(ranked):

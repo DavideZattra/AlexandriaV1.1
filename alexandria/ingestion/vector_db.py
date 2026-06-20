@@ -3,8 +3,8 @@ import os
 import shutil
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from alexandria_chunking import load_and_chunk_data
-from config import CHROMA_PATH, EMBEDDING_MODEL
+from alexandria.ingestion.chunking import load_and_chunk_data
+from alexandria.config import CHROMA_PATH, EMBEDDING_MODEL
 
 def build_vector_db():
     print("--- ALEXANDRIA: VECTOR DATABASE BUILDER ---")

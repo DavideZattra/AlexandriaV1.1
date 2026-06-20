@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
-from config import (
+from alexandria.config import (
     CHROMA_PATH,
     EMBEDDING_MODEL,
     RERANK_CANDIDATES,
@@ -17,9 +17,9 @@ from config import (
     ENABLE_CONTEXT_EXPANSION,
     CONTEXT_WINDOW,
 )
-from conversation_logger import ConversationLogger
-from reranker import CrossEncoderReranker
-from context_expansion import expand_contiguous_pages
+from alexandria.core.conversation_logger import ConversationLogger
+from alexandria.retrieval.reranker import CrossEncoderReranker
+from alexandria.retrieval.context_expansion import expand_contiguous_pages
 
 # --- 1. STATE DEFINITION ---
 class AgentState(TypedDict):
