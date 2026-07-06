@@ -24,6 +24,13 @@ import json
 import re
 from typing import Sequence
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think(text: str) -> str:
+    """Remove reasoning-model <think> blocks, leaving only the final answer."""
+    return _THINK_RE.sub("", text).strip()
+
 
 def enum_grammar(field: str, values: Sequence[str]) -> str:
     """Build a GBNF grammar that only accepts {"<field>": "<one of values>"}."""
@@ -41,11 +48,9 @@ def lenient_enum_parse(raw: str, field: str, values: Sequence[str], default: str
     Generalization of the original router band-aid: strip reasoning blocks,
     try strict JSON anywhere in the text, then keyword-scan, then default.
     """
-    text = raw.strip()
-
     # Reasoning models wrap deliberation in <think> blocks that may themselves
     # contain example JSON — drop them before searching for the real verdict.
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = strip_think(raw)
 
     # 1. Try to find a JSON object anywhere in the response
     match = re.search(r"\{.*?\}", text, re.DOTALL)

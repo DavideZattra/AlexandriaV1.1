@@ -14,9 +14,10 @@ from alexandria.config import (
     RERANK_TOP_K,
     ENABLE_CONTEXT_EXPANSION,
     CONTEXT_WINDOW,
+    GROUNDING_MAX_RETRIES,
 )
 from alexandria.core.conversation_logger import ConversationLogger
-from alexandria.core.structured import invoke_enum
+from alexandria.core.structured import invoke_enum, strip_think
 from alexandria.retrieval.reranker import CrossEncoderReranker
 from alexandria.retrieval.context_expansion import expand_contiguous_pages
 
@@ -27,6 +28,9 @@ class AgentState(TypedDict):
     # Annotated with operator.add allows nodes to append to this list
     documents: Annotated[List[str], operator.add]
     generation: str
+    # Self-RAG grounding loop bookkeeping
+    grounded: str            # last grounding verdict: "yes" / "no" / "caveat"
+    grounding_attempts: int  # regenerations triggered so far (capped)
 
 # --- 2. LLM SETUP (llama.cpp) ---
 llm = ChatOpenAI(
@@ -109,30 +113,103 @@ def generator_node(state: AgentState):
     if not documents:
         return {"generation": "I could not find any relevant information in the manual to answer this question."}
 
+    system = (
+        "Answer the user's question based ONLY on the context below. "
+        "Each context block is tagged with its source document and page number. "
+        "Cite the page number(s) you used in your answer. "
+        "If the context does not contain the answer, say so explicitly.\n\n"
+    )
+
+    # Strict retry pass: the previous answer failed the grounding check.
+    if state.get("grounding_attempts", 0) > 0:
+        print("(strict regeneration after failed grounding check)")
+        system = (
+            "Your previous answer contained claims that are NOT supported by the "
+            "context. Rewrite it now using ONLY facts explicitly present in the "
+            "context below — do not add background knowledge, do not infer beyond "
+            "what is written. If the context does not fully answer the question, "
+            "say exactly which part is missing. "
+            "Cite the page number(s) for every claim.\n\n"
+        )
+
     context = "\n\n".join(documents)
     prompt = [
-        SystemMessage(content=(
-            "Answer the user's question based ONLY on the context below. "
-            "Each context block is tagged with its source document and page number. "
-            "Cite the page number(s) you used in your answer. "
-            "If the context does not contain the answer, say so explicitly.\n\n"
-            f"CONTEXT:\n{context}"
-        )),
+        SystemMessage(content=system + f"CONTEXT:\n{context}"),
         HumanMessage(content=state["question"])
     ]
     response = llm.invoke(prompt)
     return {"generation": response.content}
+
+def grounding_node(state: AgentState):
+    """Self-RAG check: is every claim in the answer supported by the context?
+
+    Verdicts: 'yes' (accept), 'no' (regenerate, capped), 'caveat' (cap reached —
+    accept but append an explicit warning so the user knows)."""
+    print("--- CHECKING GROUNDING ---")
+    documents = state["documents"]
+    answer = strip_think(state["generation"])
+    attempts = state.get("grounding_attempts", 0)
+
+    # Nothing was retrieved: the generator already answered "not found" —
+    # there are no claims to verify.
+    if not documents:
+        return {"grounded": "yes"}
+
+    context = "\n\n".join(documents)
+    prompt = [
+        SystemMessage(content=(
+            "You are a strict fact-checker for a technical-manual assistant. "
+            "You are given CONTEXT excerpts from the manual and an ANSWER. "
+            "Decide whether every factual claim in the ANSWER is supported by the "
+            "CONTEXT. Judge only factual support, not style or completeness. "
+            'Respond with ONLY a JSON object: {"verdict": "yes"} if fully '
+            'supported, {"verdict": "no"} if any claim is unsupported.'
+        )),
+        HumanMessage(content=(
+            f"CONTEXT:\n{context}\n\n"
+            f"QUESTION: {state['question']}\n\n"
+            f"ANSWER:\n{answer}"
+        )),
+    ]
+    # Default "yes": if the verdict infrastructure itself fails, degrade to the
+    # non-agentic behavior (accept) rather than punishing a possibly fine answer.
+    verdict = invoke_enum(
+        llm, prompt, field="verdict", values=("yes", "no"), default="yes"
+    )
+    print(f"Grounding verdict: {verdict} (attempt {attempts})")
+
+    if verdict == "yes":
+        return {"grounded": "yes"}
+
+    if attempts < GROUNDING_MAX_RETRIES:
+        # Loop back to generate with the strict prompt.
+        return {"grounded": "no", "grounding_attempts": attempts + 1}
+
+    # Retry budget exhausted: accept, but say so honestly.
+    caveat = (
+        "\n\n[Warning: this answer did not pass the automatic grounding check "
+        "against the retrieved manual pages. Verify the cited pages before "
+        "relying on it.]"
+    )
+    return {"grounded": "caveat", "generation": state["generation"] + caveat}
 
 def chitchat_node(state: AgentState):
     print("--- HANDLING CHITCHAT ---")
     response = llm.invoke([HumanMessage(content=state["question"])])
     return {"generation": response.content}
 
-# --- 4. CONDITIONAL LOGIC (The Edge) ---
+# --- 4. CONDITIONAL LOGIC (The Edges) ---
 def decide_next_node(state: AgentState):
     if state["classification"] == "manual_search":
         return "retrieve"
     return "chitchat"
+
+def decide_after_grounding(state: AgentState):
+    # 'no' means: failed the check and retry budget remains -> regenerate.
+    # 'yes' / 'caveat' both terminate.
+    if state["grounded"] == "no":
+        return "regenerate"
+    return "accept"
 
 # --- 5. GRAPH CONSTRUCTION ---
 workflow = StateGraph(AgentState)
@@ -141,6 +218,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("router", router_node)
 workflow.add_node("retrieve", retrieve_node)
 workflow.add_node("generate", generator_node)
+workflow.add_node("check_grounding", grounding_node)
 workflow.add_node("chitchat", chitchat_node)
 
 # Set Entry Point
@@ -156,9 +234,18 @@ workflow.add_conditional_edges(
     }
 )
 
-# Complete the paths
+# Complete the paths. Generation is now followed by the Self-RAG grounding
+# check, which can loop back to generate (strict retry) before terminating.
 workflow.add_edge("retrieve", "generate")
-workflow.add_edge("generate", END)
+workflow.add_edge("generate", "check_grounding")
+workflow.add_conditional_edges(
+    "check_grounding",
+    decide_after_grounding,
+    {
+        "regenerate": "generate",
+        "accept": END,
+    }
+)
 workflow.add_edge("chitchat", END)
 
 # Compile the Graph
