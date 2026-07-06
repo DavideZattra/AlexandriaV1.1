@@ -46,6 +46,12 @@ class ConversationLogger:
             "retrieved_documents": result.get("documents", []),
             "num_retrieved": len(result.get("documents", []) or []),
             "generation": result.get("generation"),
+            # Agentic loop verdicts (absent on chitchat / pre-agentic runs)
+            "grade": result.get("grade"),
+            "retry_count": result.get("retry_count", 0),
+            "rewritten_question": result.get("rewritten_question"),
+            "grounded": result.get("grounded"),
+            "grounding_attempts": result.get("grounding_attempts", 0),
             "latency_s": round(latency_s, 3) if latency_s is not None else None,
             "error": error,
         }

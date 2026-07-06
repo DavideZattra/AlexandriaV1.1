@@ -47,9 +47,16 @@ RERANK_TOP_K = 5        # Stage 2: how many chunks survive reranking and feed th
 ENABLE_CONTEXT_EXPANSION = True
 CONTEXT_WINDOW = 1  # Number of pages to include on each side of a retrieved page
 
-# --- AGENTIC LOOPS (Self-RAG grounding check) ---
-# After generation, a verdict node asks whether every claim in the answer is
-# supported by the retrieved context. If not, the answer is regenerated once
-# with a stricter prompt; if it still fails, it is returned with an explicit
-# caveat. The cap prevents infinite loops (each retry is a full LLM call).
+# --- AGENTIC LOOPS ---
+# Self-RAG grounding check: after generation, a verdict node asks whether every
+# claim in the answer is supported by the retrieved context. If not, the answer
+# is regenerated once with a stricter prompt; if it still fails, it is returned
+# with an explicit caveat. The cap prevents infinite loops (each retry is a
+# full LLM call).
 GROUNDING_MAX_RETRIES = 1
+
+# CRAG document grading: after retrieval, a verdict node asks whether the
+# retrieved context is sufficient to answer the question. If not, the query is
+# rewritten (expanded acronyms, precise manual terminology) and retrieval runs
+# again, up to this many rewrites, before generating from whatever was found.
+RETRIEVAL_MAX_RETRIES = 2

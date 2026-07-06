@@ -1,6 +1,5 @@
-import operator
 import time
-from typing import Annotated, List, TypedDict
+from typing import List, TypedDict
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,6 +14,7 @@ from alexandria.config import (
     ENABLE_CONTEXT_EXPANSION,
     CONTEXT_WINDOW,
     GROUNDING_MAX_RETRIES,
+    RETRIEVAL_MAX_RETRIES,
 )
 from alexandria.core.conversation_logger import ConversationLogger
 from alexandria.core.structured import invoke_enum, strip_think
@@ -25,9 +25,15 @@ from alexandria.retrieval.context_expansion import expand_contiguous_pages
 class AgentState(TypedDict):
     question: str
     classification: str
-    # Annotated with operator.add allows nodes to append to this list
-    documents: Annotated[List[str], operator.add]
+    # Plain replace semantics: when the CRAG loop re-retrieves with a rewritten
+    # query, the new context must REPLACE the old (graded-irrelevant) one, not
+    # be appended to it.
+    documents: List[str]
     generation: str
+    # CRAG retrieval loop bookkeeping
+    rewritten_question: str  # reformulated query used for re-retrieval
+    grade: str               # last document-grading verdict: "yes" / "no"
+    retry_count: int         # query rewrites triggered so far (capped)
     # Self-RAG grounding loop bookkeeping
     grounded: str            # last grounding verdict: "yes" / "no" / "caveat"
     grounding_attempts: int  # regenerations triggered so far (capped)
@@ -79,7 +85,11 @@ def router_node(state: AgentState):
 
 def retrieve_node(state: AgentState):
     print("--- RETRIEVING FROM CHROMADB ---")
-    question = state["question"]
+    # On CRAG retry passes, search with the rewritten query; the ORIGINAL
+    # question is still what generation answers.
+    question = state.get("rewritten_question") or state["question"]
+    if question != state["question"]:
+        print(f"(using rewritten query: {question!r})")
 
     # Stage 1: bi-encoder retrieval — cast a wide net of candidates.
     candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
@@ -105,6 +115,72 @@ def retrieve_node(state: AgentState):
 
     print(f"Retrieved {len(retrieved_docs)} context blocks.")
     return {"documents": retrieved_docs}
+
+def grade_documents_node(state: AgentState):
+    """CRAG check: is the retrieved context sufficient to answer the question?
+
+    One verdict call over the whole stitched context (not per-chunk): cheaper
+    on a local model, and 'is the answer in here at all' is the decision that
+    actually gates the loop."""
+    print("--- GRADING RETRIEVED DOCUMENTS ---")
+    documents = state["documents"]
+
+    # Nothing retrieved at all: grading is trivially 'no'.
+    if not documents:
+        return {"grade": "no"}
+
+    context = "\n\n".join(documents)
+    prompt = [
+        SystemMessage(content=(
+            "You are a retrieval grader for a technical-manual assistant. "
+            "You are given CONTEXT excerpts retrieved from the manual and a "
+            "QUESTION. Decide whether the CONTEXT contains enough information "
+            "to answer the QUESTION. Partial but substantial coverage counts "
+            "as yes; loosely related material that does not address the "
+            "question counts as no. "
+            'Respond with ONLY a JSON object: {"verdict": "yes"} or {"verdict": "no"}.'
+        )),
+        HumanMessage(content=(
+            f"CONTEXT:\n{context}\n\n"
+            f"QUESTION: {state['question']}"
+        )),
+    ]
+    # Default "yes": if the verdict infrastructure fails, proceed to generation
+    # (non-agentic behavior) instead of burning retries on an infra problem.
+    verdict = invoke_enum(
+        llm, prompt, field="verdict", values=("yes", "no"), default="yes"
+    )
+    print(f"Document grade: {verdict} (rewrites so far: {state.get('retry_count', 0)})")
+    return {"grade": verdict}
+
+def rewrite_query_node(state: AgentState):
+    """Reformulate the question into a better retrieval query.
+
+    Free-text generation (no grammar): expand acronyms, use the manual's
+    precise terminology, drop conversational filler. Only retrieval sees the
+    rewrite; the user's original question is preserved for generation."""
+    print("--- REWRITING QUERY ---")
+    previous = state.get("rewritten_question") or state["question"]
+    prompt = [
+        SystemMessage(content=(
+            "You improve search queries for a point-of-sale (POS) technical "
+            "manual's vector search index. Rewrite the user's question as a "
+            "concise search query: expand acronyms, use precise technical "
+            "terminology likely to appear in the manual, keep every named "
+            "entity, and remove conversational filler. The previous query "
+            "retrieved irrelevant passages, so phrase it differently. "
+            "Respond with ONLY the rewritten query, nothing else."
+        )),
+        HumanMessage(content=(
+            f"Original question: {state['question']}\n"
+            f"Previous query: {previous}"
+        )),
+    ]
+    response = llm.invoke(prompt)
+    rewritten = strip_think(response.content).strip().strip('"')
+    retry_count = state.get("retry_count", 0) + 1
+    print(f"Rewritten query ({retry_count}/{RETRIEVAL_MAX_RETRIES}): {rewritten!r}")
+    return {"rewritten_question": rewritten, "retry_count": retry_count}
 
 def generator_node(state: AgentState):
     print("--- GENERATING ANSWER ---")
@@ -204,6 +280,17 @@ def decide_next_node(state: AgentState):
         return "retrieve"
     return "chitchat"
 
+def decide_after_grading(state: AgentState):
+    # Context sufficient -> generate. Insufficient -> rewrite and re-retrieve
+    # while budget remains; once exhausted, generate anyway from what we have
+    # (the generator admits gaps, and the grounding check catches fabrication).
+    if state["grade"] == "yes":
+        return "generate"
+    if state.get("retry_count", 0) < RETRIEVAL_MAX_RETRIES:
+        return "rewrite"
+    print(f"Rewrite budget exhausted ({RETRIEVAL_MAX_RETRIES}); generating from best-effort context.")
+    return "generate"
+
 def decide_after_grounding(state: AgentState):
     # 'no' means: failed the check and retry budget remains -> regenerate.
     # 'yes' / 'caveat' both terminate.
@@ -217,6 +304,8 @@ workflow = StateGraph(AgentState)
 # Add Nodes
 workflow.add_node("router", router_node)
 workflow.add_node("retrieve", retrieve_node)
+workflow.add_node("grade_documents", grade_documents_node)
+workflow.add_node("rewrite_query", rewrite_query_node)
 workflow.add_node("generate", generator_node)
 workflow.add_node("check_grounding", grounding_node)
 workflow.add_node("chitchat", chitchat_node)
@@ -234,9 +323,21 @@ workflow.add_conditional_edges(
     }
 )
 
-# Complete the paths. Generation is now followed by the Self-RAG grounding
-# check, which can loop back to generate (strict retry) before terminating.
-workflow.add_edge("retrieve", "generate")
+# CRAG loop: retrieval is graded; insufficient context triggers a query
+# rewrite and re-retrieval (capped), then generation proceeds regardless.
+workflow.add_edge("retrieve", "grade_documents")
+workflow.add_conditional_edges(
+    "grade_documents",
+    decide_after_grading,
+    {
+        "generate": "generate",
+        "rewrite": "rewrite_query",
+    }
+)
+workflow.add_edge("rewrite_query", "retrieve")
+
+# Self-RAG loop: generation is grounding-checked and can loop back to a
+# strict regeneration pass before terminating.
 workflow.add_edge("generate", "check_grounding")
 workflow.add_conditional_edges(
     "check_grounding",
