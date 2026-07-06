@@ -15,9 +15,10 @@ from datetime import datetime
 
 # Import core RAG components and parameters from the agent graph
 try:
-    from alexandria.agent.graph import llm, vector_db, reranker, RETRIEVAL_K
-    from alexandria.config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW
+    from alexandria.agent.graph import llm, reranker
+    from alexandria.config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW, EMBEDDING_PROFILES, DEFAULT_PROFILE
     from alexandria.retrieval.context_expansion import expand_contiguous_pages
+    from alexandria.embeddings import load_vector_db
     from alexandria.paths import EVAL_RESULTS_DIR
 except ImportError:
     print("Error: Could not import components from alexandria.agent.graph. Make sure this is run from the workspace root.")
@@ -68,14 +69,14 @@ def load_queries(file_path):
             
     return queries
 
-def retrieve_baseline(question: str):
+def retrieve_baseline(question: str, vdb):
     """Stage-1 only: pure bi-encoder similarity, top RERANK_TOP_K chunks.
 
     Uses the same final chunk count as the reranked mode so the two are an
     apples-to-apples comparison (same number of chunks fed to the LLM; the only
     difference is whether they were reranked)."""
     print(f"--- Retrieving from ChromaDB (top {RERANK_TOP_K}, no rerank) ---")
-    results = vector_db.similarity_search(question, k=RERANK_TOP_K)
+    results = vdb.similarity_search(question, k=RERANK_TOP_K)
     retrieved_docs = []
     for doc in results:
         page = doc.metadata.get("source_page", "unknown")
@@ -83,13 +84,13 @@ def retrieve_baseline(question: str):
         retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
     return retrieved_docs
 
-def retrieve_reranked(question: str):
+def retrieve_reranked(question: str, vdb):
     """Two-stage retrieval: bi-encoder candidate pool + cross-encoder rerank.
 
     Stage 1 retrieves RERANK_CANDIDATES via ChromaDB, Stage 2 reranks them with
     the cross-encoder and keeps the top RERANK_TOP_K."""
     print(f"--- Retrieving {RERANK_CANDIDATES} candidates, reranking to top {RERANK_TOP_K} ---")
-    candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
+    candidates = vdb.similarity_search(question, k=RERANK_CANDIDATES)
     if not candidates:
         return []
     ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
@@ -100,17 +101,17 @@ def retrieve_reranked(question: str):
         retrieved_docs.append(f"[Source: {document_name}, Page {page}]\n{doc.page_content}")
     return retrieved_docs
 
-def retrieve_expanded(question: str):
+def retrieve_expanded(question: str, vdb):
     """Full pipeline: bi-encoder + cross-encoder rerank + contiguous page expansion.
 
     Stage 1 retrieves RERANK_CANDIDATES, Stage 2 reranks to RERANK_TOP_K, Stage 3
     expands each surviving chunk with its neighbouring pages (+/- CONTEXT_WINDOW)."""
     print(f"--- Retrieving {RERANK_CANDIDATES}, rerank to {RERANK_TOP_K}, expand +/- {CONTEXT_WINDOW} page(s) ---")
-    candidates = vector_db.similarity_search(question, k=RERANK_CANDIDATES)
+    candidates = vdb.similarity_search(question, k=RERANK_CANDIDATES)
     if not candidates:
         return []
     ranked = reranker.rerank(question, candidates, top_k=RERANK_TOP_K)
-    return expand_contiguous_pages(vector_db, ranked, window=CONTEXT_WINDOW)
+    return expand_contiguous_pages(vdb, ranked, window=CONTEXT_WINDOW)
 
 def generate_answer(question: str, retrieved_docs: list) -> str:
     """Send retrieved context + question to the local LLM."""
@@ -146,19 +147,22 @@ def generate_direct(question: str) -> str:
     except Exception as e:
         return f"Error during direct generation: {e}"
 
-def run_mode(mode, question):
-    """Execute a single query with the selected mode configuration."""
+def run_mode(mode, question, vdb=None):
+    """Execute a single query with the selected mode configuration.
+
+    vdb is the embedding profile's vector store; required for retrieval modes,
+    ignored for direct_llm (which is embedder-independent)."""
     start_time = time.perf_counter()
     retrieved_docs = []
-    
+
     if mode == "baseline":
-        retrieved_docs = retrieve_baseline(question)
+        retrieved_docs = retrieve_baseline(question, vdb)
         generation = generate_answer(question, retrieved_docs)
     elif mode == "reranked":
-        retrieved_docs = retrieve_reranked(question)
+        retrieved_docs = retrieve_reranked(question, vdb)
         generation = generate_answer(question, retrieved_docs)
     elif mode == "expanded":
-        retrieved_docs = retrieve_expanded(question)
+        retrieved_docs = retrieve_expanded(question, vdb)
         generation = generate_answer(question, retrieved_docs)
     elif mode == "direct_llm":
         generation = generate_direct(question)
@@ -209,11 +213,15 @@ def parse_queries_arg(queries_str, loaded_queries):
         return loaded_queries
     return selected
 
-def write_markdown_report(results, modes, timestamp):
-    """Write comparison results in a beautiful Markdown report."""
+def write_markdown_report(results, modes, timestamp, descriptions=None):
+    """Write comparison results in a beautiful Markdown report.
+
+    `modes` here are run labels (e.g. 'baseline[bge]') and `descriptions` maps
+    each label to a human-readable summary."""
+    descriptions = descriptions or {}
     os.makedirs(OUTPUT_DIR + MK_DIR, exist_ok=True)
     report_path = os.path.join(OUTPUT_DIR + MK_DIR, f"report_baseline_{timestamp}.md")
-    
+
     # Compute aggregates
     avg_latency = {}
     for mode in modes:
@@ -224,16 +232,10 @@ def write_markdown_report(results, modes, timestamp):
         f.write(f"# Alexandria RAG Baseline Evaluation Report\n\n")
         f.write(f"*Generated on:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write(f"This report compares the performance and answer quality of your current baseline RAG setup against direct LLM response.\n\n")
-        
+
         f.write(f"## Configuration Performance Summary\n\n")
         f.write(f"| Mode | Avg Latency (s) | Queries Run | Description |\n")
         f.write(f"| :--- | :--- | :--- | :--- |\n")
-        descriptions = {
-            "baseline": f"Baseline RAG (Chroma top {RERANK_TOP_K}, no rerank + LLM)",
-            "reranked": f"Two-stage RAG (Chroma top {RERANK_CANDIDATES} -> cross-encoder rerank to {RERANK_TOP_K} + LLM)",
-            "expanded": f"Full pipeline (rerank to {RERANK_TOP_K} -> contiguous page expansion +/- {CONTEXT_WINDOW} + LLM)",
-            "direct_llm": "Direct LLM (No context retrieval)"
-        }
         for mode in modes:
             f.write(f"| **{mode}** | {avg_latency[mode]:.2f}s | {len(results)} | {descriptions.get(mode, '')} |\n")
             
@@ -263,10 +265,25 @@ def write_markdown_report(results, modes, timestamp):
     print(f"\n[Success] Markdown report written to: {report_path}")
     return report_path
 
+def mode_description(mode, profile=None):
+    """Human-readable description for a run, optionally tagged with the embedder."""
+    pname = f" [{profile}]" if profile else ""
+    if mode == "baseline":
+        return f"Baseline RAG{pname} (Chroma top {RERANK_TOP_K}, no rerank + LLM)"
+    if mode == "reranked":
+        return f"Two-stage RAG{pname} (Chroma top {RERANK_CANDIDATES} -> rerank to {RERANK_TOP_K} + LLM)"
+    if mode == "expanded":
+        return f"Full pipeline{pname} (rerank to {RERANK_TOP_K} -> page expansion +/-{CONTEXT_WINDOW} + LLM)"
+    if mode == "direct_llm":
+        return "Direct LLM (No context retrieval)"
+    return ""
+
 def main():
     parser = argparse.ArgumentParser(description="Run baseline evaluation on Alexandria test queries.")
     parser.add_argument("--mode", type=str, default="baseline",
                         help="Comma-separated configurations to run: baseline, reranked, expanded, direct_llm, or 'all'")
+    parser.add_argument("--embedder", type=str, default=DEFAULT_PROFILE,
+                        help=f"Embedding profile(s) for retrieval modes: {', '.join(EMBEDDING_PROFILES)}, 'both', or 'all'")
     parser.add_argument("--queries", type=str, default="all",
                         help="Comma-separated query numbers (e.g., '1,2,5') or range ('1-5') or 'all'")
     parser.add_argument("--queries-file", type=str, default="./Docs/Test_Queries.txt",
@@ -283,18 +300,57 @@ def main():
             print(f"Error: No valid modes specified in '{args.mode}'. Choose from: {all_available_modes}")
             sys.exit(1)
 
+    # Determine embedding profiles to test
+    if args.embedder.lower() in ("both", "all"):
+        selected_embedders = list(EMBEDDING_PROFILES)
+    else:
+        selected_embedders = [e.strip() for e in args.embedder.split(",") if e.strip() in EMBEDDING_PROFILES]
+        if not selected_embedders:
+            print(f"Error: No valid embedders in '{args.embedder}'. Choose from: {list(EMBEDDING_PROFILES)}, 'both'")
+            sys.exit(1)
+
+    # Load each profile's vector DB (skip profiles whose DB hasn't been built yet)
+    vdbs = {}
+    for prof in selected_embedders:
+        path = EMBEDDING_PROFILES[prof]["path"]
+        if not os.path.exists(path):
+            print(f"Warning: DB for profile '{prof}' not found at {path}. "
+                  f"Build it with: python build_db.py --profile {prof}")
+            continue
+        vdbs[prof] = load_vector_db(prof)
+
+    retrieval_modes = [m for m in modes_to_run if m != "direct_llm"]
+    if retrieval_modes and not vdbs:
+        print("Error: No embedding databases available for the requested retrieval modes.")
+        sys.exit(1)
+
+    # Build run specs: (label, mode, profile). direct_llm is embedder-independent.
+    multi = len(vdbs) > 1
+    run_specs = []
+    descriptions = {}
+    for mode in modes_to_run:
+        if mode == "direct_llm":
+            run_specs.append(("direct_llm", "direct_llm", None))
+            descriptions["direct_llm"] = mode_description("direct_llm")
+        else:
+            for prof in vdbs:
+                label = f"{mode}[{prof}]" if multi else mode
+                run_specs.append((label, mode, prof))
+                descriptions[label] = mode_description(mode, prof if multi else None)
+
     # Load and filter queries
     loaded_queries = load_queries(args.queries_file)
     if not loaded_queries:
         sys.exit(1)
-        
+
     selected_queries = parse_queries_arg(args.queries, loaded_queries)
-    
+
     print("=" * 60)
     print(f"ALEXANDRIA RAG BASELINE EVALUATION HARNESS")
     print(f"Loaded {len(loaded_queries)} queries from: {args.queries_file}")
     print(f"Running {len(selected_queries)} selected queries")
     print(f"Configurations to test: {', '.join(modes_to_run)}")
+    print(f"Embedding profiles: {', '.join(vdbs) if vdbs else '(none / direct_llm only)'}")
     print("=" * 60)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -307,22 +363,22 @@ def main():
             "question": q_text,
             "runs": {}
         }
-        
-        for mode in modes_to_run:
-            print(f"  -> Executing config: {mode}...", end="", flush=True)
+
+        for label, mode, prof in run_specs:
+            print(f"  -> Executing config: {label}...", end="", flush=True)
             try:
-                run_data = run_mode(mode, q_text)
-                query_result["runs"][mode] = run_data
+                run_data = run_mode(mode, q_text, vdbs.get(prof) if prof else None)
+                query_result["runs"][label] = run_data
                 print(f" Done ({run_data['latency_s']:.2f}s)")
             except Exception as e:
                 print(f" ERROR: {e}")
-                query_result["runs"][mode] = {
+                query_result["runs"][label] = {
                     "generation": f"Error: Exception occurred during evaluation run: {e}",
                     "latency_s": 0.0,
                     "citations": [],
                     "num_sources": 0
                 }
-                
+
         results.append(query_result)
 
     # Write outputs
@@ -333,7 +389,8 @@ def main():
         json.dump(results, f, indent=2, ensure_ascii=False)
     print(f"\n[Success] Detailed JSON results saved to: {json_path}")
     
-    report_path = write_markdown_report(results, modes_to_run, timestamp)
+    run_labels = [label for label, _, _ in run_specs]
+    report_path = write_markdown_report(results, run_labels, timestamp, descriptions)
     print("=" * 60)
     print("Evaluation completed successfully.")
     print("=" * 60)

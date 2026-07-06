@@ -1,7 +1,10 @@
 #!/usr/bin/env python
-"""Entrypoint: build the ChromaDB vector database from the chunked knowledge base."""
+"""Entrypoint: build the ChromaDB vector database from the chunked knowledge base.
 
-from alexandria.ingestion.vector_db import build_vector_db
+Accepts --profile minilm|bge|all (see alexandria.ingestion.vector_db).
+"""
+
+from alexandria.ingestion.vector_db import main
 
 if __name__ == "__main__":
-    build_vector_db()
+    main()

@@ -11,6 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Persisted data directories (gitignored)
-CHROMA_DIR = PROJECT_ROOT / "alexandria_db"
+CHROMA_DIR = PROJECT_ROOT / "alexandria_db"            # default (minilm) profile
+CHROMA_BGE_DIR = PROJECT_ROOT / "alexandria_db_bge"    # bge profile
 KNOWLEDGE_BASE_DIR = PROJECT_ROOT / "alexandria_knowledge_base"
 EVAL_RESULTS_DIR = PROJECT_ROOT / "Docs" / "Evaluation_Results"
