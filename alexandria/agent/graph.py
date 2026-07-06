@@ -1,6 +1,4 @@
-import json
 import operator
-import re
 import time
 from typing import Annotated, List, TypedDict
 
@@ -18,6 +16,7 @@ from alexandria.config import (
     CONTEXT_WINDOW,
 )
 from alexandria.core.conversation_logger import ConversationLogger
+from alexandria.core.structured import invoke_enum
 from alexandria.retrieval.reranker import CrossEncoderReranker
 from alexandria.retrieval.context_expansion import expand_contiguous_pages
 
@@ -49,37 +48,6 @@ reranker = CrossEncoderReranker()
 
 # --- 3. NODES ---
 
-def _parse_classification(raw: str) -> str:
-    """Robustly extract the classification from a noisy LLM response.
-
-    Local models often wrap JSON in markdown fences or add stray text, so we
-    cannot rely on json.loads alone. We try strict JSON first, then fall back
-    to keyword detection, defaulting to 'manual_search' (the safe choice for a
-    knowledge-base assistant)."""
-    text = raw.strip()
-
-    # 1. Try to find a JSON object anywhere in the response
-    match = re.search(r"\{.*?\}", text, re.DOTALL)
-    if match:
-        try:
-            decision = json.loads(match.group(0))
-            value = str(decision.get("classification", "")).lower()
-            if "chitchat" in value:
-                return "chitchat"
-            if "manual" in value:
-                return "manual_search"
-        except json.JSONDecodeError:
-            pass
-
-    # 2. Fall back to keyword detection on the raw text
-    lowered = text.lower()
-    if "chitchat" in lowered:
-        return "chitchat"
-
-    # 3. Default to manual_search (safer for a manual-querying assistant)
-    return "manual_search"
-
-
 def router_node(state: AgentState):
     print("--- ROUTING QUESTION ---")
     question = state["question"]
@@ -93,8 +61,15 @@ def router_node(state: AgentState):
         )),
         HumanMessage(content=question)
     ]
-    response = llm.invoke(prompt)
-    classification = _parse_classification(response.content)
+    # GBNF-constrained: the model physically cannot answer anything other than
+    # {"classification": "manual_search"} or {"classification": "chitchat"}.
+    classification = invoke_enum(
+        llm,
+        prompt,
+        field="classification",
+        values=("manual_search", "chitchat"),
+        default="manual_search",  # safe choice for a knowledge-base assistant
+    )
     print(f"Classified as: {classification}")
     return {"classification": classification}
 
