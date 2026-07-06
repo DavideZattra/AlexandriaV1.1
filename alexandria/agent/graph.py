@@ -3,12 +3,9 @@ from typing import List, TypedDict
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 from alexandria.config import (
-    CHROMA_PATH,
-    EMBEDDING_MODEL,
+    DEFAULT_PROFILE,
     RERANK_CANDIDATES,
     RERANK_TOP_K,
     ENABLE_CONTEXT_EXPANSION,
@@ -18,6 +15,7 @@ from alexandria.config import (
 )
 from alexandria.core.conversation_logger import ConversationLogger
 from alexandria.core.structured import invoke_enum, strip_think
+from alexandria.embeddings import load_vector_db
 from alexandria.retrieval.reranker import CrossEncoderReranker
 from alexandria.retrieval.context_expansion import expand_contiguous_pages
 
@@ -50,8 +48,10 @@ llm = ChatOpenAI(
 # (Stage 2) then narrows it down to RERANK_TOP_K before generation.
 RETRIEVAL_K = RERANK_CANDIDATES
 
-embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+# Loaded through the profile machinery so model-specific query prefixes
+# (e.g. BGE's retrieval instruction) are applied at query time.
+vector_db = load_vector_db(DEFAULT_PROFILE)
+print(f"Vector store: profile '{DEFAULT_PROFILE}'")
 
 # --- 2c. CROSS-ENCODER RERANKER SETUP (Stage 2) ---
 reranker = CrossEncoderReranker()

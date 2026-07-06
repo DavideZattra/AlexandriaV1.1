@@ -24,7 +24,7 @@ EMBEDDING_PROFILES = {
         "query_prefix": "Represent this sentence for searching relevant passages: ",
     },
 }
-DEFAULT_PROFILE = "minilm"
+DEFAULT_PROFILE = "bge"
 
 # Backward-compatible aliases derived from the default profile. Existing imports
 # (agent/graph.py, ingestion/vector_db.py) keep working unchanged.

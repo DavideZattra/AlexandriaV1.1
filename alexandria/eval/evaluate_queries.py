@@ -15,7 +15,7 @@ from datetime import datetime
 
 # Import core RAG components and parameters from the agent graph
 try:
-    from alexandria.agent.graph import llm, reranker
+    from alexandria.agent.graph import llm, reranker, app as agentic_app
     from alexandria.config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW, EMBEDDING_PROFILES, DEFAULT_PROFILE
     from alexandria.retrieval.context_expansion import expand_contiguous_pages
     from alexandria.embeddings import load_vector_db
@@ -151,9 +151,11 @@ def run_mode(mode, question, vdb=None):
     """Execute a single query with the selected mode configuration.
 
     vdb is the embedding profile's vector store; required for retrieval modes,
-    ignored for direct_llm (which is embedder-independent)."""
+    ignored for direct_llm (embedder-independent) and agentic (the graph owns
+    its own vector store, bound to the default profile)."""
     start_time = time.perf_counter()
     retrieved_docs = []
+    loop_stats = None
 
     if mode == "baseline":
         retrieved_docs = retrieve_baseline(question, vdb)
@@ -164,13 +166,27 @@ def run_mode(mode, question, vdb=None):
     elif mode == "expanded":
         retrieved_docs = retrieve_expanded(question, vdb)
         generation = generate_answer(question, retrieved_docs)
+    elif mode == "agentic":
+        # Full LangGraph agent: routing + CRAG grading/rewrite loop +
+        # Self-RAG grounding loop (uses the default-profile vector DB).
+        result = agentic_app.invoke({"question": question})
+        retrieved_docs = result.get("documents", []) or []
+        generation = result.get("generation", "")
+        loop_stats = {
+            "classification": result.get("classification"),
+            "grade": result.get("grade"),
+            "retry_count": result.get("retry_count", 0),
+            "rewritten_question": result.get("rewritten_question"),
+            "grounded": result.get("grounded"),
+            "grounding_attempts": result.get("grounding_attempts", 0),
+        }
     elif mode == "direct_llm":
         generation = generate_direct(question)
     else:
         raise ValueError(f"Unknown mode: {mode}")
-        
+
     latency = time.perf_counter() - start_time
-    
+
     # Extract source page citations from retrieved docs
     citations = []
     for doc in retrieved_docs:
@@ -178,13 +194,16 @@ def run_mode(mode, question, vdb=None):
         if match:
             citations.append(int(match.group(1)))
     citations = sorted(list(set(citations)))
-    
-    return {
+
+    run_data = {
         "generation": generation,
         "latency_s": latency,
         "citations": citations,
         "num_sources": len(retrieved_docs)
     }
+    if loop_stats is not None:
+        run_data["loop_stats"] = loop_stats
+    return run_data
 
 def parse_queries_arg(queries_str, loaded_queries):
     """Parse comma-separated query list or select 'all'."""
@@ -259,6 +278,14 @@ def write_markdown_report(results, modes, timestamp, descriptions=None):
                 f.write(f"#### [{mode.upper()}]\n")
                 quoted_gen = "\n".join([f"> {line}" for line in run["generation"].split("\n")])
                 f.write(f"{quoted_gen}\n\n")
+                stats = run.get("loop_stats")
+                if stats:
+                    f.write(
+                        f"*Agentic loops: grade={stats.get('grade')}, "
+                        f"rewrites={stats.get('retry_count')}, "
+                        f"grounded={stats.get('grounded')}, "
+                        f"regenerations={stats.get('grounding_attempts')}*\n\n"
+                    )
             
             f.write(f"---\n\n")
             
@@ -274,6 +301,9 @@ def mode_description(mode, profile=None):
         return f"Two-stage RAG{pname} (Chroma top {RERANK_CANDIDATES} -> rerank to {RERANK_TOP_K} + LLM)"
     if mode == "expanded":
         return f"Full pipeline{pname} (rerank to {RERANK_TOP_K} -> page expansion +/-{CONTEXT_WINDOW} + LLM)"
+    if mode == "agentic":
+        return (f"Agentic RAG (LangGraph: routing + CRAG grade/rewrite loop + "
+                f"Self-RAG grounding loop; '{DEFAULT_PROFILE}' embedder)")
     if mode == "direct_llm":
         return "Direct LLM (No context retrieval)"
     return ""
@@ -281,7 +311,7 @@ def mode_description(mode, profile=None):
 def main():
     parser = argparse.ArgumentParser(description="Run baseline evaluation on Alexandria test queries.")
     parser.add_argument("--mode", type=str, default="baseline",
-                        help="Comma-separated configurations to run: baseline, reranked, expanded, direct_llm, or 'all'")
+                        help="Comma-separated configurations to run: baseline, reranked, expanded, agentic, direct_llm, or 'all'")
     parser.add_argument("--embedder", type=str, default=DEFAULT_PROFILE,
                         help=f"Embedding profile(s) for retrieval modes: {', '.join(EMBEDDING_PROFILES)}, 'both', or 'all'")
     parser.add_argument("--queries", type=str, default="all",
@@ -291,7 +321,7 @@ def main():
     args = parser.parse_args()
 
     # Determine modes to run
-    all_available_modes = ["baseline", "reranked", "expanded", "direct_llm"]
+    all_available_modes = ["baseline", "reranked", "expanded", "agentic", "direct_llm"]
     if args.mode.lower() == "all":
         modes_to_run = all_available_modes
     else:
@@ -319,19 +349,21 @@ def main():
             continue
         vdbs[prof] = load_vector_db(prof)
 
-    retrieval_modes = [m for m in modes_to_run if m != "direct_llm"]
+    # agentic and direct_llm don't consume the per-profile stores: direct_llm
+    # retrieves nothing, and the agentic graph owns its own (default-profile) DB.
+    retrieval_modes = [m for m in modes_to_run if m not in ("direct_llm", "agentic")]
     if retrieval_modes and not vdbs:
         print("Error: No embedding databases available for the requested retrieval modes.")
         sys.exit(1)
 
-    # Build run specs: (label, mode, profile). direct_llm is embedder-independent.
+    # Build run specs: (label, mode, profile).
     multi = len(vdbs) > 1
     run_specs = []
     descriptions = {}
     for mode in modes_to_run:
-        if mode == "direct_llm":
-            run_specs.append(("direct_llm", "direct_llm", None))
-            descriptions["direct_llm"] = mode_description("direct_llm")
+        if mode in ("direct_llm", "agentic"):
+            run_specs.append((mode, mode, None))
+            descriptions[mode] = mode_description(mode)
         else:
             for prof in vdbs:
                 label = f"{mode}[{prof}]" if multi else mode
