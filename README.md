@@ -34,9 +34,11 @@ The architecture engineers a complete end-to-end pipeline, from preliminary *Dat
 - **Vision-Based PDF Parsing (Marker + Surya OCR):** Advanced layout-aware PDF-to-Markdown conversion capable of extracting tables, hierarchical formatting, and structured text blocks — overcoming severe limitations of traditional text-scraping.
 - **Markdown-Aware Hierarchical Chunking:** A semantic chunking strategy that respects Markdown structural tags (`#`, `##`, `###`), preserving table integrity and preventing context fragmentation within the vector DB.
 - **Enterprise Source Traceability:** Every chunk ingested into the vector database is tagged with immutable metadata (source page number, document name), allowing the LLM to cite verifiable sources.
-- **Agentic RAG Router (LangGraph):** A stateful LangGraph agent classifies each query as `manual_search` or `chitchat`, routing it to either the ChromaDB retriever or a direct LLM response path.
+- **Dual Embedding Profiles:** Two embedding models coexist in separate ChromaDB stores for A/B accuracy comparison — `BAAI/bge-large-en-v1.5` (1024-dim, the default, with its asymmetric query-instruction prefix applied at query time) and `all-MiniLM-L6-v2` (384-dim). Selectable via `--profile` / `--embedder` flags.
 - **Two-Stage Cross-Encoder Reranking:** A wide bi-encoder candidate pool (ChromaDB) is re-scored by a local cross-encoder (`ms-marco-MiniLM-L-6-v2`), keeping only the most relevant chunks for generation.
 - **Contiguous Page Context Expansion:** Reranked chunks are expanded with their neighbouring pages (±1 page) and stitched in reading order, so procedures and tables spanning page breaks stay intact.
+- **Agentic RAG (LangGraph):** A stateful cyclic graph, not a linear pipeline. Queries are classified (`manual_search` / `chitchat`); retrieved context is **graded** (CRAG) and, if insufficient, the query is **rewritten** and retrieval retried; generated answers pass a **Self-RAG grounding check** that triggers a strict regeneration or an explicit warning caveat when claims are not supported by the retrieved pages.
+- **Grammar-Constrained Verdicts (GBNF):** All agentic yes/no decisions use llama.cpp grammar-constrained decoding — the sampler can only emit tokens matching a JSON grammar, making malformed verdicts impossible and skipping reasoning-model preambles (~0.2 s per verdict). Layered fallbacks (lenient parsing, safe defaults) mean a verdict can never crash the graph.
 - **High-Efficiency Local Inference (llama.cpp):** Response generation is delegated to the native C++ `llama.cpp` engine with full GPU layer offloading on Tensor Cores, configured with strict temperature constraints to minimize hallucinations.
 
 ---
@@ -77,18 +79,50 @@ Alexandria's pipeline is divided into 6 sequential, decoupled software modules:
         ▼
 ┌──────────────────────────────────────┐
 │  4. VECTOR DATABASE                   │ ─> Computes embeddings, persists to ChromaDB
-│  alexandria/ingestion/vector_db.py    │    Model: all-MiniLM-L6-v2 (local, ~100MB)
-│                                       │    Outputs: alexandria_db/
+│  alexandria/ingestion/vector_db.py    │    Profiles: bge-large-en-v1.5 (default) /
+│  (+ embeddings.py profile registry)   │    all-MiniLM-L6-v2 — one DB directory each
+│                                       │    Outputs: alexandria_db_bge/, alexandria_db/
 └──────────────────────────────────────┘
         │
         ▼
 ┌──────────────────────────────────────┐
-│  5. RAG QUERY ENGINE                  │ <─> LangGraph: classify → retrieve → rerank
-│  alexandria/agent/graph.py            │     → expand → generate
-│  (+ retrieval/reranker.py,            │     → llama.cpp LLM server (localhost:8080)
-│     retrieval/context_expansion.py)   │
+│  5. AGENTIC RAG QUERY ENGINE          │ <─> LangGraph cyclic graph (see below)
+│  alexandria/agent/graph.py            │     retrieve → rerank → expand → grade
+│  (+ retrieval/reranker.py,            │     → generate → grounding check
+│     retrieval/context_expansion.py,   │     → llama.cpp LLM server (localhost:8080)
+│     core/structured.py GBNF verdicts) │
 └──────────────────────────────────────┘
 ```
+
+### Agentic Query Flow
+
+The query engine is a **cyclic** LangGraph, not a fixed pipeline. Two self-correction
+loops (CRAG document grading + query rewriting, and a Self-RAG grounding check) let
+the system retry weak retrievals and refuse to return unsupported claims:
+
+```
+[router] ─(chitchat)──────────────────────────────────────────> END
+    │
+    └(manual_search)
+         ▼
+     [retrieve] <────────────────┐          retrieve = similarity top-20
+         ▼                       │                     → cross-encoder rerank top-5
+  [grade_documents]              │                     → page expansion ±1
+         ├─ yes ──────────────┐  │
+         └─ no ──> [rewrite_query]          (≤ 2 rewrites, then best-effort)
+                              ▼
+                        [generate] <──────┐
+                              ▼           │
+                     [check_grounding]    │
+                        ├─ grounded ──────┼──> END
+                        ├─ not grounded ──┘   (1 strict regeneration)
+                        └─ still failing ───> END with explicit warning caveat
+```
+
+Every branch decision is a GBNF grammar-constrained JSON verdict (`core/structured.py`):
+malformed output is impossible at the sampler level, with lenient parsing and safe
+defaults as fallback layers. Loop caps (`RETRIEVAL_MAX_RETRIES`, `GROUNDING_MAX_RETRIES`
+in `config.py`) bound the extra LLM calls.
 
 ---
 
@@ -194,18 +228,21 @@ To restart from scratch, delete `alexandria_checkpoint.txt`.
 Reads all generated Markdown files, splits them semantically by Markdown headers, and ingests the chunks into a persistent ChromaDB vector store.
 
 ```powershell
-python build_db.py
+python build_db.py                    # default profile (bge)
+python build_db.py --profile minilm   # or: bge | all (chunks once, builds every profile)
 ```
 
-This invokes `alexandria/ingestion/vector_db.py`, which calls `alexandria/ingestion/chunking.py` internally. Embeddings are computed locally using `sentence-transformers/all-MiniLM-L6-v2`.  
-**Output:** `alexandria_db/` (ChromaDB persistent store)
+This invokes `alexandria/ingestion/vector_db.py`, which calls `alexandria/ingestion/chunking.py` internally. Each embedding profile (`bge` = `BAAI/bge-large-en-v1.5`, `minilm` = `all-MiniLM-L6-v2`) gets its own database directory, since their vector dimensions differ (1024 vs 384).  
+**Output:** `alexandria_db_bge/` and/or `alexandria_db/` (ChromaDB persistent stores)
 
 ---
 
 ### Phase 4 — Query the Knowledge Base
-The LangGraph-based RAG agent (`alexandria/agent/graph.py`) classifies the user query and routes it to the appropriate node:
-- `manual_search` → retrieve from ChromaDB → cross-encoder rerank → contiguous page expansion → generate via llama.cpp
+The agentic LangGraph RAG engine (`alexandria/agent/graph.py`) runs each query through the cyclic graph shown in [Agentic Query Flow](#agentic-query-flow):
+- `manual_search` → retrieve (rerank + page expansion) → **grade context** (rewrite query and retry if insufficient) → generate → **grounding check** (strict regeneration or explicit caveat if unsupported)
 - `chitchat` → respond directly via llama.cpp without retrieval
+
+Every turn is logged as JSONL (question, retrieved context, loop verdicts, latency) under `logs/` for post-mortem analysis.
 
 Interactive chat:
 
@@ -220,6 +257,7 @@ from alexandria.agent.graph import app
 
 result = app.invoke({"question": "How do I configure a new outlet in TCPOS?"})
 print(result["generation"])
+print(result["grade"], result["grounded"])   # loop verdicts
 ```
 
 Requires the `llama.cpp` server running on `http://localhost:8080`.
@@ -227,11 +265,22 @@ Requires the `llama.cpp` server running on `http://localhost:8080`.
 ---
 
 ### Evaluation
-Compare retrieval configurations (`baseline`, `reranked`, `expanded`, `direct_llm`) across the test query set, producing Markdown + JSON reports under `Docs/Evaluation_Results/`.
+Compare pipeline configurations across the fixed test query set, producing Markdown + JSON reports (including per-answer agentic loop verdicts) under `Docs/Evaluation_Results/`:
+
+| Mode | Pipeline |
+|------|----------|
+| `direct_llm` | No retrieval (control) |
+| `baseline` | ChromaDB similarity top-5 only |
+| `reranked` | top-20 → cross-encoder rerank → top-5 |
+| `expanded` | reranked + contiguous page expansion |
+| `agentic` | Full LangGraph agent with CRAG + grounding loops |
 
 ```powershell
-python evaluate.py --mode all --queries all
+python evaluate.py --mode all --queries all            # full ablation ladder
+python evaluate.py --mode expanded --embedder both     # A/B the two embedding profiles
 ```
+
+The `--embedder minilm|bge|both` flag runs the retrieval modes against each embedding profile's database (`agentic` and `direct_llm` run once — the agent owns its own store).
 
 ---
 
@@ -258,31 +307,35 @@ AlexandriaV1.1/
 │
 ├── alexandria/                       # Main package
 │   ├── paths.py                      # Project-root-anchored data directory paths
-│   ├── config.py                     # Shared config (embedding model, rerank/expansion params)
+│   ├── config.py                     # Shared config (embedding profiles, rerank/expansion params, loop caps)
+│   ├── embeddings.py                 # Embedding-profile registry loader + query-prefix wrapper
 │   ├── core/
-│   │   └── conversation_logger.py    # JSONL per-session conversation logging
+│   │   ├── conversation_logger.py    # JSONL per-session logging (incl. agentic loop verdicts)
+│   │   └── structured.py             # GBNF grammar-constrained JSON verdicts + fallbacks
 │   ├── ingestion/                    # Offline knowledge-base build pipeline
 │   │   ├── sanitize_pdfs.py          # Phase 0: PDF noise removal
 │   │   ├── chapter_splitter.py       # Phase 1: Chapter-level PDF splitting
 │   │   ├── batch_ingestion.py        # Phase 2: Page-by-page OCR ingestion (Marker)
 │   │   ├── chunking.py               # Phase 3a: Markdown semantic chunking
-│   │   ├── vector_db.py              # Phase 3b: ChromaDB vector store builder
+│   │   ├── vector_db.py              # Phase 3b: ChromaDB vector store builder (--profile)
 │   │   ├── vision_extractor.py       # Vision-LLM (Qwen2.5-VL) extraction utility
 │   │   └── legacy/                   # Early prototypes (ingest.py, cleaner.py, pdf_tester.py)
 │   ├── retrieval/                    # Query-time retrieval building blocks
 │   │   ├── reranker.py               # Cross-encoder reranker (Stage 2)
 │   │   └── context_expansion.py      # Contiguous page context expansion (Stage 3)
 │   ├── agent/
-│   │   └── graph.py                  # Phase 4: LangGraph RAG agent + chat loop
+│   │   └── graph.py                  # Phase 4: agentic LangGraph (CRAG + grounding loops) + chat loop
 │   └── eval/
-│       └── evaluate_queries.py       # Evaluation harness (baseline/reranked/expanded/direct)
+│       └── evaluate_queries.py       # Evaluation harness (direct/baseline/reranked/expanded/agentic)
 │
 ├── alexandria_checkpoint.txt         # Ingestion resume state
 ├── alexandria_knowledge_base/        # OCR output (Markdown per page)
 ├── alexandria_macro_chapters/        # Chapter-split PDFs
-├── alexandria_db/                    # ChromaDB persistent vector store
+├── alexandria_db_bge/                # ChromaDB store — bge profile (default)
+├── alexandria_db/                    # ChromaDB store — minilm profile
+├── logs/                             # JSONL conversation logs (per session)
 ├── Manuals/                          # Source PDFs (raw + sanitized)
-├── Tests/                            # Standalone test scripts
+├── Tests/                            # Standalone test scripts (incl. test_structured.py)
 ├── Docs/                             # Project documentation & requirements
 └── .venv/                            # Isolated Python environment
 ```
