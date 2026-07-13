@@ -19,6 +19,7 @@ try:
     from alexandria.config import RERANK_CANDIDATES, RERANK_TOP_K, CONTEXT_WINDOW, EMBEDDING_PROFILES, DEFAULT_PROFILE
     from alexandria.retrieval.context_expansion import expand_contiguous_pages
     from alexandria.embeddings import load_vector_db
+    from alexandria.core.structured import strip_think
     from alexandria.paths import EVAL_RESULTS_DIR
 except ImportError:
     print("Error: Could not import components from alexandria.agent.graph. Make sure this is run from the workspace root.")
@@ -276,7 +277,10 @@ def write_markdown_report(results, modes, timestamp, descriptions=None):
             for mode in modes:
                 run = q["runs"][mode]
                 f.write(f"#### [{mode.upper()}]\n")
-                quoted_gen = "\n".join([f"> {line}" for line in run["generation"].split("\n")])
+                # Report shows the clean final answer; the JSON log keeps the
+                # raw generation (including any <think> reasoning) unchanged.
+                answer = strip_think(run["generation"]) or run["generation"]
+                quoted_gen = "\n".join([f"> {line}" for line in answer.split("\n")])
                 f.write(f"{quoted_gen}\n\n")
                 stats = run.get("loop_stats")
                 if stats:
