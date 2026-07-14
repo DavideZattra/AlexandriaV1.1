@@ -1,0 +1,41 @@
+---
+title: "Figure 6.1 — Agentic (Cyclic) Query Graph"
+config:
+  flowchart:
+    curve: linear
+---
+flowchart TD
+    start(["User Question"])
+    router{{"Router<br/><i>classify (GBNF verdict)</i>"}}
+    chit["Chitchat<br/><i>direct LLM reply</i>"]
+
+    retrieve["Retrieve<br/><i>similarity top-20 &rarr; rerank top-5<br/>&rarr; page expansion ±1</i>"]
+    grade{{"Grade Documents<br/><i>context sufficient? (CRAG)</i>"}}
+    rewrite["Rewrite Query<br/><i>reformulate for retrieval</i>"]
+    generate["Generate<br/><i>answer original question<br/>from context</i>"]
+    ground{{"Check Grounding<br/><i>claims supported? (Self-RAG)</i>"}}
+    done(["Answer<br/>(grounded, or caveated)"])
+
+    start --> router
+    router -. "chitchat" .-> chit --> done
+    router -- "manual_search" --> retrieve
+    retrieve --> grade
+
+    grade -- "sufficient" --> generate
+    grade -. "insufficient<br/>(retries &lt; 2)" .-> rewrite
+    rewrite -- "re-retrieve" --> retrieve
+    grade -. "budget exhausted" .-> generate
+
+    generate --> ground
+    ground -- "grounded" --> done
+    ground -. "not grounded<br/>(1 strict retry)" .-> generate
+    ground -. "still failing" .-> done
+
+    classDef node fill:#f2f0ff,stroke:#6b5bd6,stroke-width:1px,line-height:1.4
+    classDef decision fill:#fff4e5,stroke:#ef8c00,stroke-width:1px,line-height:1.3
+    classDef term fill:#ede7f6,stroke:#5e35b1,stroke-width:1px
+    class chit,retrieve,rewrite,generate node
+    class router,grade,ground decision
+    class start,done term
+
+    linkStyle default stroke-width:1.5px

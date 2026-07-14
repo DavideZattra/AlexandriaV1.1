@@ -1,0 +1,24 @@
+---
+title: "Figure 4.3(c) — expanded: + contiguous page expansion"
+config:
+  flowchart:
+    curve: linear
+---
+flowchart TB
+    q(["Query"])
+    s1["Bi-encoder similarity search<br/>ChromaDB, top 20"]
+    s2["Cross-encoder rerank<br/>keep top 5"]
+    s3["Contiguous page expansion<br/>fetch pages ±1 of each survivor<br/>($in filter, stitched in reading order)"]
+    ctx["Context: ~11 blocks<br/>(whole procedures preserved)"]
+
+    q --> s1 --> s2 --> s3 --> ctx
+
+    classDef stage fill:#f2f0ff,stroke:#6b5bd6,stroke-width:1px,line-height:1.3
+    classDef new fill:#f3e8ff,stroke:#9333ea,stroke-width:2px,line-height:1.3
+    classDef ctx fill:#e8f5e9,stroke:#43a047,stroke-width:1px,line-height:1.3
+    classDef q fill:#ede7f6,stroke:#5e35b1,stroke-width:1px
+
+    class s1,s2 stage
+    class s3 new
+    class ctx ctx
+    class q q

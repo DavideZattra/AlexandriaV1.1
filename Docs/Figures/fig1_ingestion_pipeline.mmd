@@ -1,0 +1,23 @@
+---
+title: "Figure 4.1 — Offline Ingestion Pipeline"
+config:
+  flowchart:
+    curve: linear
+---
+flowchart TD
+    raw["Raw PDF Manual<br/>(~2,700 pages)"]
+
+    s0["<b>0. Data Sanitization</b><br/>sanitize_pdfs.py — PyMuPDF<br/><i>Strip covers, indices, legal pages</i>"]
+    s1["<b>1. Macro-Chapter Splitting</b><br/>chapter_splitter.py — PyMuPDF<br/><i>22 chapter PDFs, page-offset aligned</i>"]
+    s2["<b>2. Batch OCR Ingestion</b><br/>batch_ingestion.py — Marker + Surya<br/><i>Layout-aware PDF to Markdown; checkpointed</i>"]
+    s3["<b>3. Semantic Chunking</b><br/>chunking.py<br/><i>Markdown-header + size split; page metadata</i>"]
+    s4["<b>4. Vector Database Build</b><br/>vector_db.py — ChromaDB<br/><i>Embed per profile (bge / minilm)</i>"]
+
+    db[("Vector Store<br/>~13,122 chunks<br/>per embedding profile")]
+
+    raw --> s0 --> s1 --> s2 --> s3 --> s4 --> db
+
+    classDef stage fill:#f2f0ff,stroke:#6b5bd6,stroke-width:1px,line-height:1.4
+    classDef io fill:#e8f5e9,stroke:#43a047,stroke-width:1px
+    class s0,s1,s2,s3,s4 stage
+    class raw,db io
